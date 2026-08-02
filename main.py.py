@@ -1,3 +1,4 @@
+import os
 import asyncio
 import sqlite3
 from datetime import datetime, timedelta
@@ -14,7 +15,7 @@ from pyrogram.types import (
 import threading
 from flask import Flask
 
-# خادم ويب وهمي لإبقاء البوت حياً
+# ==================== خادم الويب المتوافق مع Render ====================
 web_app = Flask('')
 
 @web_app.route('/')
@@ -22,10 +23,12 @@ def home():
     return "Bot is Running 24/7!"
 
 def run_web():
-    web_app.run(host='0.0.0.0', port=8080)
+    # قراءة المنفذ ديناميكياً من بيئة Render
+    port = int(os.environ.get("PORT", 8080))
+    web_app.run(host='0.0.0.0', port=port)
 
-# تشغيل خادم الويب في الخلفية
-threading.Thread(target=run_web).start()
+# تشغيل خادم الويب كـ daemon thread في الخلفية
+threading.Thread(target=run_web, daemon=True).start()
 
 # ==================== 1. الإعدادات والبيانات ====================
 API_ID = 32087655
@@ -407,9 +410,8 @@ async def handle_reply_buttons(client: Client, message: Message):
             [
                 InlineKeyboardButton("🕒 3 ساعات", callback_data="set_time_180"),
                 InlineKeyboardButton("🕔 5 ساعات", callback_data="set_time_300"),
-                InlineKeyboardButton("🕛 12 ساعة", callback_data="set_time_720")
-            ],
-            [InlineKeyboardButton("✏️ إدخال عدد الدقائق يدوياً", callback_data="set_custom_time")]
+                InlineKeyboardButton("```python
+            ]
         ])
         await message.reply_text(
             f"⏱️ **اختر الفارق الزمني المطلوبة:**\n*(الحالي: `{round(POST_INTERVAL/60, 1)}` دقيقة)*", 
@@ -728,7 +730,7 @@ async def auto_collect_all_types(client: Client, message: Message):
     state = user_states.get(user_id)
 
     if state == "waiting_add_channel" and message.text:
-        clean_text = text.replace("https://t.me/", "").replace("t.me/", "").strip("@ ")
+        clean_text = text.replace("[https://t.me/](https://t.me/)", "").replace("t.me/", "").strip("@ ")
         ch = f"@{clean_text}"
         add_channel_db(ch)
         await message.reply_text(f"✅ تم إضافة القناة `{ch}` بنجاح!", reply_markup=get_main_reply_keyboard())
@@ -772,6 +774,7 @@ async def auto_collect_all_types(client: Client, message: Message):
 
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("⏱️ 30 دقيقة", callback_data="rec_int_30"), InlineKeyboardButton("🕐 1 ساعة", callback_data="rec_int_60")],
+            [InlineKeyboardButton("🕒 6 ساعات", callback_data="rec_int_360"), InlineKeyboardButton("```python
             [InlineKeyboardButton("🕒 6 ساعات", callback_data="rec_int_360"), InlineKeyboardButton("🕛 24 ساعة", callback_data="rec_int_1440")]
         ])
         await message.reply_text(
