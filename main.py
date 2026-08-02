@@ -243,6 +243,9 @@ def format_time_label(seconds):
     if mins < 60:
         return f"{mins} دقيقة"
     hours = mins // 60
+    rem_mins = mins % 60
+    if rem_mins > 0:
+        return f"{hours} ساعة و {rem_mins} دقيقة"
     return f"{hours} ساعة"
 
 def build_recurring_main_kb(user_id):
@@ -361,7 +364,7 @@ async def handle_reply_buttons(client: Client, message: Message):
     global is_paused, POST_INTERVAL, user_states, last_post_time
     text = message.text.strip()
 
-    # 1. بدء / إيقاف النشر (فقط الأزرار الخاصة بالتشغيل/الإيقاف)
+    # 1. بدء / إيقاف النشر
     if text.startswith("🟢") or text.startswith("🔴"):
         is_paused = not is_paused
         status_text = (
@@ -456,7 +459,7 @@ async def handle_reply_buttons(client: Client, message: Message):
             msg_text += (
                 f"📌 **مُعرّف:** `{r_id}`\n"
                 f"⏰ **التكرار القادم:** `{dt_str}`\n"
-                f"⏱️ **كل:** `{round(interval_sec/60, 1)}` دقيقة | 🔁 **المتبقي:** `{rem_str}`\n"
+                f"⏱️ **كل:** `{format_time_label(interval_sec)}` | 🔁 **المتبقي:** `{rem_str}`\n"
                 f"───────────────────\n"
             )
             buttons.append([
@@ -575,9 +578,15 @@ async def callback_handler(client: Client, query: CallbackQuery):
                 [InlineKeyboardButton("⏱️ 30 دقيقة", callback_data=f"set_edit_start_{r_id}_1800"), InlineKeyboardButton("🕐 ساعة", callback_data=f"set_edit_start_{r_id}_3600")],
                 [InlineKeyboardButton("🕒 5 ساعات", callback_data=f"set_edit_start_{r_id}_18000"), InlineKeyboardButton("🕕 6 ساعات", callback_data=f"set_edit_start_{r_id}_21600")],
                 [InlineKeyboardButton("🕛 12 ساعة", callback_data=f"set_edit_start_{r_id}_43200"), InlineKeyboardButton("🗓️ 24 ساعة", callback_data=f"set_edit_start_{r_id}_86400")],
+                [InlineKeyboardButton("✏️ إدخال يدوي (بالدقائق)", callback_data=f"custom_edit_start_{r_id}")],
                 [InlineKeyboardButton("🔙 رجوع", callback_data=f"edit_rec_{r_id}")]
             ])
-            await query.message.edit_text("⏰ **اختر الموعد القادم الجديد:**", reply_markup=kb)
+            await query.message.edit_text("⏰ **اختر الموعد القادم الجديد أو أدخله يدوياً:**", reply_markup=kb)
+
+        elif data.startswith("custom_edit_start_"):
+            r_id = int(data.replace("custom_edit_start_", ""))
+            user_states[user_id] = f"waiting_custom_edit_start_{r_id}"
+            await query.message.edit_text("✏️ **أرسل وقت البدء بعد كم دقيقة من الآن (أرقام فقط):**\n*(مثال: أرسل `45` لبدء النشر بعد 45 دقيقة)*")
 
         elif data.startswith("set_edit_start_"):
             parts = data.replace("set_edit_start_", "").split("_")
@@ -596,18 +605,23 @@ async def callback_handler(client: Client, query: CallbackQuery):
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("⏱️ 5 دقائق", callback_data=f"set_edit_int_{r_id}_300"), InlineKeyboardButton("⏱️ 30 دقيقة", callback_data=f"set_edit_int_{r_id}_1800")],
                 [InlineKeyboardButton("🕐 ساعة", callback_data=f"set_edit_int_{r_id}_3600"), InlineKeyboardButton("🕒 5 ساعات", callback_data=f"set_edit_int_{r_id}_18000")],
-                [InlineKeyboardButton("🕕 6 ساعات", callback_data=f"set_edit_int_{r_id}_21600"), InlineKeyboardButton("🕛 12 ساعة", callback_data=f"set_edit_int_{r_id}_43200")],
-                [InlineKeyboardButton("🗓️ 24 ساعة", callback_data=f"set_edit_int_{r_id}_86400")],
+                [InlineKeyboardButton("```python
+                [InlineKeyboardButton("✏️ إدخال يدوي (بالدقائق)", callback_data=f"custom_edit_int_{r_id}")],
                 [InlineKeyboardButton("🔙 رجوع", callback_data=f"edit_rec_{r_id}")]
             ])
-            await query.message.edit_text("⏱️ **اختر الزمن الجديد بين التكرارات:**", reply_markup=kb)
+            await query.message.edit_text("⏱️ **اختر الفارق الزمني الجديد بين كل تكرار أو أدخله يدوياً:**", reply_markup=kb)
+
+        elif data.startswith("custom_edit_int_"):
+            r_id = int(data.replace("custom_edit_int_", ""))
+            user_states[user_id] = f"waiting_custom_edit_int_{r_id}"
+            await query.message.edit_text("✏️ **أرسل الفارق الزمني الجديد بين التكرارات بالدقائق (أرقام فقط):**\n*(مثال: أرسل `120` للتكرار كل ساعتين)*")
 
         elif data.startswith("set_edit_int_"):
             parts = data.replace("set_edit_int_", "").split("_")
             r_id, sec = int(parts[0]), int(parts[1])
             if user_id in edit_posts:
                 edit_posts[user_id]['interval_sec'] = sec
-            await query.answer("تم تحديث الزمن بين التكرارات!")
+            await query.answer("تم تحديث الفارق الزمني!")
             await query.message.edit_text(
                 f"✏️ **تعديل المنشور المكرر #{r_id}**\n───────────────────\nاختر الإعداد المراد تعديله:",
                 reply_markup=build_edit_recurring_kb(r_id, user_id)
@@ -616,12 +630,18 @@ async def callback_handler(client: Client, query: CallbackQuery):
         elif data.startswith("edit_field_rep_"):
             r_id = int(data.replace("edit_field_rep_", ""))
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("♾️ غير محدود", callback_data=f"set_edit_rep_{r_id}_-1")],
-                [InlineKeyboardButton("5 مرات", callback_data=f"set_edit_rep_{r_id}_5"), InlineKeyboardButton("10 مرات", callback_data=f"set_edit_rep_{r_id}_10")],
-                [InlineKeyboardButton("20 مرة", callback_data=f"set_edit_rep_{r_id}_20"), InlineKeyboardButton("50 مرة", callback_data=f"set_edit_rep_{r_id}_50")],
+                [InlineKeyboardButton("♾️ غير محدود", callback_data=f"set_edit_rep_{r_id}_-1"), InlineKeyboardButton("1️⃣ مرة واحدة", callback_data=f"set_edit_rep_{r_id}_1")],
+                [InlineKeyboardButton("3️⃣ ثلاث مرات", callback_data=f"set_edit_rep_{r_id}_3"), InlineKeyboardButton("5️⃣ 5 مرات", callback_data=f"set_edit_rep_{r_id}_5")],
+                [InlineKeyboardButton("🔟 10 مرات", callback_data=f"set_edit_rep_{r_id}_10")],
+                [InlineKeyboardButton("✏️ إدخال يدوي", callback_data=f"custom_edit_rep_{r_id}")],
                 [InlineKeyboardButton("🔙 رجوع", callback_data=f"edit_rec_{r_id}")]
             ])
-            await query.message.edit_text("🔁 **اختر عدد المرات الجديد:**", reply_markup=kb)
+            await query.message.edit_text("🔁 **اختر عدد مرات التكرار الجديدة:**", reply_markup=kb)
+
+        elif data.startswith("custom_edit_rep_"):
+            r_id = int(data.replace("custom_edit_rep_", ""))
+            user_states[user_id] = f"waiting_custom_edit_rep_{r_id}"
+            await query.message.edit_text("✏️ **أرسل عدد مرات التكرار الجديدة (أرقام فقط):**")
 
         elif data.startswith("set_edit_rep_"):
             parts = data.replace("set_edit_rep_", "").split("_")
@@ -636,44 +656,33 @@ async def callback_handler(client: Client, query: CallbackQuery):
 
         elif data.startswith("edit_save_"):
             r_id = int(data.replace("edit_save_", ""))
-            p = edit_posts.get(user_id)
-            if p:
+            if user_id in edit_posts:
+                p = edit_posts[user_id]
                 conn = sqlite3.connect("bot_data.db")
                 cursor = conn.cursor()
                 cursor.execute("""
                     UPDATE recurring_posts 
-                    SET next_run_timestamp = ?, repeat_interval_seconds = ?, remaining_repeats = ?
+                    SET next_run_timestamp = ?, repeat_interval_seconds = ?, remaining_repeats = ? 
                     WHERE id = ?
                 """, (p['next_ts'], p['interval_sec'], p['remaining'], r_id))
                 conn.commit()
                 conn.close()
                 del edit_posts[user_id]
-                await query.message.edit_text(f"✅ **تم حفظ التعديلات على المنشور المكرر #{r_id} بنجاح!**")
+                await query.answer("تم حفظ التعديلات بنجاح!", show_alert=True)
+                await query.message.edit_text("✅ **تم حفظ إعدادات المنشور المكرر المحدثة بنجاح.**")
 
         elif data == "back_to_recs":
+            if user_id in edit_posts:
+                del edit_posts[user_id]
             recs = get_recurring_db()
-            if not recs:
-                await query.message.edit_text("🔄 **لا توجد منشورات مكررة نشطة حالياً.**")
-                return
-            
             msg_text = "🔄 **قائمة المنشورات المكررة المبرمجة:**\n───────────────────\n"
             buttons = []
             for r in recs:
                 r_id, _, _, _, _, next_run_ts, interval_sec, remaining = r
                 dt_str = datetime.fromtimestamp(next_run_ts).strftime('%H:%M - %Y/%m/%d')
                 rem_str = "بلا نهاية" if remaining == -1 else f"{remaining} مرة"
-                
-                msg_text += (
-                    f"📌 **مُعرّف:** `{r_id}`\n"
-                    f"⏰ **التكرار القادم:** `{dt_str}`\n"
-                    f"⏱️ **كل:** `{round(interval_sec/60, 1)}` دقيقة | 🔁 **المتبقي:** `{rem_str}`\n"
-                    f"───────────────────\n"
-                )
-                buttons.append([
-                    InlineKeyboardButton(f"✏️ تعديل #{r_id}", callback_data=f"edit_rec_{r_id}"),
-                    InlineKeyboardButton(f"🗑️ إزالة #{r_id}", callback_data=f"delete_rec_{r_id}")
-                ])
-
+                msg_text += f"📌 **مُعرّف:** `{r_id}`\n⏰ **التكرار القادم:** `{dt_str}`\n⏱️ **كل:** `{format_time_label(interval_sec)}` | 🔁 **المتبقي:** `{rem_str}`\n───────────────────\n"
+                buttons.append([InlineKeyboardButton(f"✏️ تعديل #{r_id}", callback_data=f"edit_rec_{r_id}"), InlineKeyboardButton(f"🗑️ إزالة #{r_id}", callback_data=f"delete_rec_{r_id}")])
             buttons.append([InlineKeyboardButton("❌ إغلاق", callback_data="action_cancel")])
             await query.message.edit_text(msg_text, reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -681,209 +690,340 @@ async def callback_handler(client: Client, query: CallbackQuery):
             q_id = int(data.replace("preview_main_q_", ""))
             conn = sqlite3.connect("bot_data.db")
             cursor = conn.cursor()
-            cursor.execute("SELECT chat_id, message_id FROM queue WHERE id = ?", (q_id,))
+            cursor.execute("SELECT chat_id, message_id, media_group_id FROM queue WHERE id = ?", (q_id,))
             row = cursor.fetchone()
             conn.close()
 
             if row:
-                await app.copy_message(chat_id=user_id, from_chat_id=row[0], message_id=row[1])
-                await query.answer("تم عرض المنشور فوق!")
+                chat_id, msg_id, media_group_id = row
+                try:
+                    if media_group_id and media_group_id != "None":
+                        await app.copy_media_group(chat_id=query.from_user.id, from_chat_id=chat_id, message_id=msg_id)
+                    else:
+                        await app.copy_message(chat_id=query.from_user.id, from_chat_id=chat_id, message_id=msg_id)
+                    await query.answer("تم إرسال المعاينة لك في الخاص!", show_alert=True)
+                except Exception as e:
+                    await query.answer(f"تعذر إرسال المعاينة: {e}", show_alert=True)
+            else:
+                await query.answer("لم يتم العثور على المنشور!", show_alert=True)
 
         elif data.startswith("delete_main_q_"):
             q_id = int(data.replace("delete_main_q_", ""))
             pop_queue_db(q_id)
-            await query.answer("تم حذف المنشور من الطابور!", show_alert=True)
-            await query.message.edit_text("🗑️ **تم حذف المنشور بنجاح.**")
+            await query.answer("تم الحذف من الطابور!", show_alert=True)
+            await query.message.edit_text("🗑️ **تم إزالة المنشور المحدد من الطابور.**")
 
-        elif data == "type_normal":
-            post_data = temp_posts.get(user_id)
-            if post_data:
-                add_to_queue_db(post_data['chat_id'], post_data['msg_id'], post_data['media_group_id'], target_channels)
-                await query.message.edit_text("📥 **تم إدراج المنشور بنجاح في الطابور الرئيسي!**")
-                del temp_posts[user_id]
+        elif data == "confirm_clear_queue":
+            clear_queue_db()
+            await query.answer("تم إفراغ الطابور!", show_alert=True)
+            await query.message.edit_text("🗑️ **تم إفراغ الطابور الرئيسي بالكامل.**")
 
-        elif data == "type_recurring" or data == "rec_menu_main":
-            if user_id in temp_posts:
-                temp_posts[user_id].setdefault('rec_start', 0)
-                temp_posts[user_id].setdefault('rec_interval', 3600)
-                temp_posts[user_id].setdefault('rec_repeats', -1)
-            
+        # خيارات إعداد المنشور المكرر الجديد
+        elif data == "post_type_recurring":
+            temp_posts[user_id]['rec_start'] = 0
+            temp_posts[user_id]['rec_interval'] = 3600
+            temp_posts[user_id]['rec_repeats'] = -1
             await query.message.edit_text(
-                "⚙️ **لوحة ضبط النشر المكرر التلقائي**\n"
-                "───────────────────\n"
-                "اختر الإعدادات المناسبة بضغط الأزرار أدناه:",
+                "🔄 **إعداد جدول النشر المكرر:**\n───────────────────\nقم بضبط تفاصيل التكرار أدناه:",
                 reply_markup=build_recurring_main_kb(user_id)
             )
 
         elif data == "rec_menu_start":
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("⚡ فوري (الآن)", callback_data="set_rec_start_0"), InlineKeyboardButton("⏱️ 5 دقائق", callback_data="set_rec_start_300")],
-                [InlineKeyboardButton("⏱️ 30 دقيقة", callback_data="set_rec_start_1800"), InlineKeyboardButton("🕐 ساعة", callback_data="set_rec_start_3600")],
-                [InlineKeyboardButton("🕒 5 ساعات", callback_data="set_rec_start_18000"), InlineKeyboardButton("🕕 6 ساعات", callback_data="set_rec_start_21600")],
-                [InlineKeyboardButton("🕛 12 ساعة", callback_data="set_rec_start_43200"), InlineKeyboardButton("🗓️ 24 ساعة", callback_data="set_rec_start_86400")],
-                [InlineKeyboardButton("🔙 رجوع", callback_data="rec_menu_main")]
+                [InlineKeyboardButton("⚡ فوري (الآن)", callback_data="rec_set_start_0"), InlineKeyboardButton("⏱️ 5 دقائق", callback_data="rec_set_start_300")],
+                [InlineKeyboardButton("⏱️ 30 دقيقة", callback_data="rec_set_start_1800"), InlineKeyboardButton("🕐 ساعة", callback_data="rec_set_start_3600")],
+                [InlineKeyboardButton("🕒 5 ساعات", callback_data="rec_set_start_18000"), InlineKeyboardButton("🕕 6 ساعات", callback_data="rec_set_start_21600")],
+                [InlineKeyboardButton("```python
+                [InlineKeyboardButton("🕛 12 ساعة", callback_data="rec_set_start_43200"), InlineKeyboardButton("🗓️ 24 ساعة", callback_data="rec_set_start_86400")],
+                [InlineKeyboardButton("✏️ إدخال يدوي (بالدقائق)", callback_data="custom_rec_start")],
+                [InlineKeyboardButton("🔙 رجوع", callback_data="rec_back_to_main")]
             ])
-            await query.message.edit_text("⏰ **اختر موعد بدء النشر الأول:**", reply_markup=kb)
+            await query.message.edit_text("⏰ **اختر موعد أول انطلاق أو أدخله يدوياً:**", reply_markup=kb)
 
-        elif data.startswith("set_rec_start_"):
-            sec = int(data.replace("set_rec_start_", ""))
-            if user_id in temp_posts:
-                temp_posts[user_id]['rec_start'] = sec
-            await query.answer("تم حفظ موعد البدء!")
+        elif data == "custom_rec_start":
+            user_states[user_id] = "waiting_custom_rec_start"
+            await query.message.edit_text("✏️ **أرسل موعد البدء بعد كم دقيقة من الآن (أرقام فقط):**\n*(مثال: أرسل `30` لبدء النشر بعد نصف ساعة)*")
+
+        elif data.startswith("rec_set_start_"):
+            sec = int(data.replace("rec_set_start_", ""))
+            temp_posts[user_id]['rec_start'] = sec
             await query.message.edit_text(
-                "⚙️ **لوحة ضبط النشر المكرر التلقائي**\n───────────────────\nاختر الإعدادات المناسبة بضغط الأزرار أدناه:",
+                "🔄 **إعداد جدول النشر المكرر:**\n───────────────────\nقم بضبط تفاصيل التكرار أدناه:",
                 reply_markup=build_recurring_main_kb(user_id)
             )
 
         elif data == "rec_menu_interval":
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("⏱️ 5 دقائق", callback_data="set_rec_int_300"), InlineKeyboardButton("⏱️ 30 دقيقة", callback_data="set_rec_int_1800")],
-                [InlineKeyboardButton("🕐 ساعة", callback_data="set_rec_int_3600"), InlineKeyboardButton("🕒 5 ساعات", callback_data="set_rec_int_18000")],
-                [InlineKeyboardButton("🕕 6 ساعات", callback_data="set_rec_int_21600"), InlineKeyboardButton("🕛 12 ساعة", callback_data="set_rec_int_43200")],
-                [InlineKeyboardButton("🗓️ 24 ساعة", callback_data="set_rec_int_86400")],
-                [InlineKeyboardButton("🔙 رجوع", callback_data="rec_menu_main")]
+                [InlineKeyboardButton("⏱️ 5 دقائق", callback_data="rec_set_int_300"), InlineKeyboardButton("⏱️ 30 دقيقة", callback_data="rec_set_int_1800")],
+                [InlineKeyboardButton("🕐 ساعة", callback_data="rec_set_int_3600"), InlineKeyboardButton("🕒 5 ساعات", callback_data="rec_set_int_18000")],
+                [InlineKeyboardButton("🕕 6 ساعات", callback_data="rec_set_int_21600"), InlineKeyboardButton("🕛 12 ساعة", callback_data="rec_set_int_43200")],
+                [InlineKeyboardButton("🗓️ 24 ساعة", callback_data="rec_set_int_86400")],
+                [InlineKeyboardButton("✏️ إدخال يدوي (بالدقائق)", callback_data="custom_rec_int")],
+                [InlineKeyboardButton("🔙 رجوع", callback_data="rec_back_to_main")]
             ])
-            await query.message.edit_text("⏱️ **اختر الزمن (الفارق) بين كل تكرار:**", reply_markup=kb)
+            await query.message.edit_text("⏱️ **اختر الفارق الزمني بين التكرارات أو أدخله يدوياً:**", reply_markup=kb)
 
-        elif data.startswith("set_rec_int_"):
-            sec = int(data.replace("set_rec_int_", ""))
-            if user_id in temp_posts:
-                temp_posts[user_id]['rec_interval'] = sec
-            await query.answer("تم حفظ الزمن بين التكرارات!")
+        elif data == "custom_rec_int":
+            user_states[user_id] = "waiting_custom_rec_int"
+            await query.message.edit_text("✏️ **أرسل الفارق الزمني بين التكرارات بالدقائق (أرقام فقط):**\n*(مثال: أرسل `90` للتكرار كل ساعة ونصف)*")
+
+        elif data.startswith("rec_set_int_"):
+            sec = int(data.replace("rec_set_int_", ""))
+            temp_posts[user_id]['rec_interval'] = sec
             await query.message.edit_text(
-                "⚙️ **لوحة ضبط النشر المكرر التلقائي**\n───────────────────\nاختر الإعدادات المناسبة بضغط الأزرار أدناه:",
+                "🔄 **إعداد جدول النشر المكرر:**\n───────────────────\nقم بضبط تفاصيل التكرار أدناه:",
                 reply_markup=build_recurring_main_kb(user_id)
             )
 
         elif data == "rec_menu_repeats":
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("♾️ غير محدود (تكرار دائم)", callback_data="set_rec_rep_-1")],
-                [InlineKeyboardButton("5 مرات", callback_data="set_rec_rep_5"), InlineKeyboardButton("10 مرات", callback_data="set_rec_rep_10")],
-                [InlineKeyboardButton("20 مرة", callback_data="set_rec_rep_20"), InlineKeyboardButton("50 مرة", callback_data="set_rec_rep_50")],
-                [InlineKeyboardButton("🔙 رجوع", callback_data="rec_menu_main")]
+                [InlineKeyboardButton("♾️ غير محدود", callback_data="rec_set_rep_-1"), InlineKeyboardButton("1️⃣ مرة واحدة", callback_data="rec_set_rep_1")],
+                [InlineKeyboardButton("3️⃣ ثلاث مرات", callback_data="rec_set_rep_3"), InlineKeyboardButton("5️⃣ 5 مرات", callback_data="rec_set_rep_5")],
+                [InlineKeyboardButton("🔟 10 مرات", callback_data="rec_set_rep_10")],
+                [InlineKeyboardButton("✏️ إدخال يدوي", callback_data="custom_rec_rep")],
+                [InlineKeyboardButton("🔙 رجوع", callback_data="rec_back_to_main")]
             ])
-            await query.message.edit_text("🔁 **اختر إجمالي عدد مرات التكرار:**", reply_markup=kb)
+            await query.message.edit_text("🔁 **اختر عدد المرات المطلوب التكرار فيها:**", reply_markup=kb)
 
-        elif data.startswith("set_rec_rep_"):
-            rep = int(data.replace("set_rec_rep_", ""))
-            if user_id in temp_posts:
-                temp_posts[user_id]['rec_repeats'] = rep
-            await query.answer("تم حفظ عدد التكرارات!")
+        elif data == "custom_rec_rep":
+            user_states[user_id] = "waiting_custom_rec_rep"
+            await query.message.edit_text("✏️ **أرسل عدد مرات التكرار المطلوب (أرقام فقط):**")
+
+        elif data.startswith("rec_set_rep_"):
+            rep = int(data.replace("rec_set_rep_", ""))
+            temp_posts[user_id]['rec_repeats'] = rep
             await query.message.edit_text(
-                "⚙️ **لوحة ضبط النشر المكرر التلقائي**\n───────────────────\nاختر الإعدادات المناسبة بضغط الأزرار أدناه:",
+                "🔄 **إعداد جدول النشر المكرر:**\n───────────────────\nقم بضبط تفاصيل التكرار أدناه:",
+                reply_markup=build_recurring_main_kb(user_id)
+            )
+
+        elif data == "rec_back_to_main":
+            await query.message.edit_text(
+                "🔄 **إعداد جدول النشر المكرر:**\n───────────────────\nقم بضبط تفاصيل التكرار أدناه:",
                 reply_markup=build_recurring_main_kb(user_id)
             )
 
         elif data == "rec_back_to_post":
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🟢 نشر مجدول عادي", callback_data="type_normal")],
-                [InlineKeyboardButton("🔄 نشر مكرر تلقائي", callback_data="type_recurring")],
+                [InlineKeyboardButton("📥 الطابور العادي", callback_data="post_type_queue")],
+                [InlineKeyboardButton("🔄 منشور مكرر", callback_data="post_type_recurring")],
                 [InlineKeyboardButton("❌ إلغاء", callback_data="action_cancel")]
             ])
-            await query.message.edit_text("📥 **تم استلام المنشور!** اختر نوع النشر المطلوب:", reply_markup=kb)
+            await query.message.edit_text("🎯 **حدد طريقة نشر هذا المحتوى:**", reply_markup=kb)
 
         elif data == "rec_confirm_save":
-            post_data = temp_posts.get(user_id)
-            if post_data:
-                start_sec = post_data.get('rec_start', 0)
-                interval_sec = post_data.get('rec_interval', 3600)
-                repeats = post_data.get('rec_repeats', -1)
-
-                start_dt = datetime.now() + timedelta(seconds=start_sec)
-
+            if user_id in temp_posts:
+                data = temp_posts[user_id]
+                start_sec = data.get('rec_start', 0)
+                interval_sec = data.get('rec_interval', 3600)
+                repeats = data.get('rec_repeats', -1)
+                
+                next_dt = datetime.now() + timedelta(seconds=start_sec)
+                
                 add_recurring_db(
-                    post_data['chat_id'],
-                    post_data['msg_id'],
-                    post_data['media_group_id'],
-                    get_channels(),
-                    start_dt,
-                    interval_sec,
-                    repeats
+                    chat_id=data['chat_id'],
+                    message_id=data['message_id'],
+                    media_group_id=data['media_group_id'],
+                    channels_list=target_channels,
+                    next_run_dt=next_dt,
+                    interval_sec=interval_sec,
+                    repeats=repeats
                 )
-
                 del temp_posts[user_id]
-                user_states[user_id] = None
-
-                rep_lbl = "غير محدود" if repeats == -1 else f"{repeats} مرة"
+                
+                dt_str = next_dt.strftime('%H:%M - %Y/%m/%d')
                 await query.message.edit_text(
-                    f"✅ **تم جدولة المنشور المكرر بنجاح!**\n───────────────────\n"
-                    f"⏰ **النشر الأول:** `{start_dt.strftime('%Y-%m-%d %H:%M')}`\n"
-                    f"⏱️ **الزمن بين التكرارات:** `{format_time_label(interval_sec)}`\n"
-                    f"🔁 **عدد المرات:** `{rep_lbl}`"
+                    f"✅ **تم جدولة المنشور المكرر بنجاح!**\n"
+                    f"───────────────────\n"
+                    f"⏰ **أول نشر:** `{dt_str}`\n"
+                    f"⏱️ **التكرار كل:** `{format_time_label(interval_sec)}`\n"
+                    f"📢 **القنوات المستهدفة:** `{len(target_channels)}` قنوات."
                 )
 
-        elif data == "confirm_clear_queue":
-            clear_queue_db()
-            await query.message.edit_text("🗑️ **تم إفراغ الطابور الرئيسي بنجاح.**")
+        elif data == "post_type_queue":
+            if user_id in temp_posts:
+                data = temp_posts[user_id]
+                add_to_queue_db(
+                    chat_id=data['chat_id'],
+                    message_id=data['message_id'],
+                    media_group_id=data['media_group_id'],
+                    channels_list=target_channels
+                )
+                del temp_posts[user_id]
+                await query.message.edit_text("✅ **تمت إضافة المنشور للطابور بنجاح!**")
 
     except Exception as e:
-        print(f"[!] خطأ تفاعل: {e}")
+        print(f"[!] Callback Error: {e}")
 
-# ==================== 7. استقبال النصوص والمنشورات ====================
+# ==================== 7. استقبال المنشورات ومدخلات المستخدم ====================
 
-@app.on_message(admin_filter & ~filters.command(["start"]))
-async def process_inputs(client: Client, message: Message):
-    global user_states, POST_INTERVAL, temp_posts
+@app.on_message(admin_filter)
+async def handle_inputs(client: Client, message: Message):
+    global user_states, POST_INTERVAL, edit_posts
     user_id = message.from_user.id
-    text = message.text or ""
     state = user_states.get(user_id)
 
-    if state == "waiting_add_channel" and message.text:
-        ch = f"@{text.replace('https://t.me/', '').replace('t.me/', '').strip('@ ')}"
-        add_channel_db(ch)
-        await message.reply_text(f"✅ تم إضافة القناة `{ch}` بنجاح!", reply_markup=get_main_reply_keyboard())
+    # 1. حالة إضافة قناة
+    if state == "waiting_add_channel":
         user_states[user_id] = None
+        ch = message.text.strip()
+        if not ch.startswith("@"):
+            ch = f"@{ch}"
+        add_channel_db(ch)
+        await message.reply_text(f"✅ **تمت إضافة القناة `{ch}` بنجاح!**", reply_markup=get_main_reply_keyboard())
         return
 
-    if state == "waiting_custom_time" and message.text:
+    # 2. حالة الفارق الزمني اليدوي للطابور
+    elif state == "waiting_custom_time":
+        user_states[user_id] = None
         try:
-            POST_INTERVAL = int(text.strip()) * 60
-            user_states[user_id] = None
-            await message.reply_text(f"✅ **تم ضبط الفارق إلى `{int(text.strip())}` دقيقة.**", reply_markup=get_main_reply_keyboard())
-            return
+            val = int(message.text.strip())
+            if val <= 0:
+                raise ValueError()
+            POST_INTERVAL = val * 60
+            await message.reply_text(f"✅ **تم ضبط الفارق الزمني على `{val}` دقيقة.**", reply_markup=get_main_reply_keyboard())
         except ValueError:
-            await message.reply_text("❌ أرسل أرقاماً فقط.")
-            return
+            await message.reply_text("❌ **عذراً، يرجى إدخال رقم صحيح وموجب فقط.**", reply_markup=get_main_reply_keyboard())
+        return
 
-    if not state and message.text not in BUTTON_TEXTS:
-        temp_posts[user_id] = {
-            'chat_id': message.chat.id,
-            'msg_id': message.id,
-            'media_group_id': str(message.media_group_id) if message.media_group_id else None,
-            'rec_start': 0,
-            'rec_interval': 3600,
-            'rec_repeats': -1
-        }
+    # 3. حالات الإدخال اليدوي لإعدادات المنشور المكرر الجديد
+    elif state == "waiting_custom_rec_start":
+        user_states[user_id] = None
+        try:
+            val = int(message.text.strip())
+            if val < 0:
+                raise ValueError()
+            temp_posts[user_id]['rec_start'] = val * 60
+            await message.reply_text(
+                "🔄 **إعداد جدول النشر المكرر:**\n───────────────────\nقم بضبط تفاصيل التكرار أدناه:",
+                reply_markup=build_recurring_main_kb(user_id)
+            )
+        except ValueError:
+            await message.reply_text("❌ **عذراً، يرجى إدخال رقم صحيح بالدقائق.**", reply_markup=get_main_reply_keyboard())
+        return
 
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🟢 نشر مجدول عادي", callback_data="type_normal")],
-            [InlineKeyboardButton("🔄 نشر مكرر تلقائي", callback_data="type_recurring")],
-            [InlineKeyboardButton("❌ إلغاء", callback_data="action_cancel")]
-        ])
+    elif state == "waiting_custom_rec_int":
+        user_states[user_id] = None
+        try:
+            val = int(message.text.strip())
+            if val <= 0:
+                raise ValueError()
+            temp_posts[user_id]['rec_interval'] = val * 60
+            await message.reply_text(
+                "🔄 **إعداد جدول النشر المكرر:**\n───────────────────\nقم بضبط تفاصيل التكرار أدناه:",
+                reply_markup=build_recurring_main_kb(user_id)
+            )
+        except ValueError:
+            await message.reply_text("❌ **عذراً، يرجى إدخال رقم صحيح موجب بالدقائق.**", reply_markup=get_main_reply_keyboard())
+        return
 
-        await message.reply_text("📥 **تم استلام المنشور!** اختر نوع النشر المطلوب:", reply_markup=kb)
+    elif state == "waiting_custom_rec_rep":
+        user_states[user_id] = None
+        try:
+            val = int(message.text.strip())
+            if val == 0:
+                raise ValueError()
+            temp_posts[user_id]['rec_repeats'] = val
+            await message.reply_text(
+                "🔄 **إعداد جدول النشر المكرر:**\n───────────────────\nقم بضبط تفاصيل التكرار أدناه:",
+                reply_markup=build_recurring_main_kb(user_id)
+            )
+        except ValueError:
+            await message.reply_text("❌ **عذراً، يرجى إدخال رقم صحيح (استخدم -1 للتكرار غير المحدود).**", reply_markup=get_main_reply_keyboard())
+        return
 
-# ==================== 8. التشغيل الرئيسي ====================
+    # 4. حالات الإدخال اليدوي عند تعديل منشور مكرر
+    elif state and state.startswith("waiting_custom_edit_start_"):
+        r_id = int(state.replace("waiting_custom_edit_start_", ""))
+        user_states[user_id] = None
+        try:
+            val = int(message.text.strip())
+            if val < 0:
+                raise ValueError()
+            new_ts = datetime.now().timestamp() + (val * 60)
+            if user_id in edit_posts:
+                edit_posts[user_id]['next_ts'] = new_ts
+            await message.reply_text(
+                f"✏️ **تعديل المنشور المكرر #{r_id}**\n───────────────────\nاختر الإعداد المراد تعديله:",
+                reply_markup=build_edit_recurring_kb(r_id, user_id)
+            )
+        except ValueError:
+            await message.reply_text("❌ **عذراً، يرجى إدخال رقم صحيح بالدقائق.**", reply_markup=get_main_reply_keyboard())
+        return
+
+    elif state and state.startswith("waiting_custom_edit_int_"):
+        r_id = int(state.replace("waiting_custom_edit_int_", ""))
+        user_states[user_id] = None
+        try:
+            val = int(message.text.strip())
+            if val <= 0:
+                raise ValueError()
+            if user_id in edit_posts:
+                edit_posts[user_id]['interval_sec'] = val * 60
+            await message.reply_text(
+                f"✏️ **تعديل المنشور المكرر #{r_id}**\n───────────────────\nاختر الإعداد المراد تعديله:",
+                reply_markup=build_edit_recurring_kb(r_id, user_id)
+            )
+        except ValueError:
+            await message.reply_text("❌ **عذراً، يرجى إدخال رقم صحيح موجب بالدقائق.**", reply_markup=get_main_reply_keyboard())
+        return
+
+    elif state and state.startswith("waiting_custom_edit_rep_"):
+        r_id = int(state.replace("waiting_custom_edit_rep_", ""))
+        user_states[user_id] = None
+        try:
+            val = int(message.text.strip())
+            if val == 0:
+                raise ValueError()
+            if user_id in edit_posts:
+                edit_posts[user_id]['remaining'] = val
+            await message.reply_text(
+                f"✏️ **تعديل المنشور المكرر #{r_id}**\n───────────────────\nاختر الإعداد المراد تعديله:",
+                reply_markup=build_edit_recurring_kb(r_id, user_id)
+            )
+        except ValueError:
+            await message.reply_text("❌ **عذراً، يرجى إدخال رقم صحيح (استخدم -1 للتكرار غير المحدود).**", reply_markup=get_main_reply_keyboard())
+        return
+
+    # 5. معالجة استقبال منشور جديد من الأدمن
+    target_channels = get_channels()
+    if not target_channels:
+        await message.reply_text("⚠️ **الرجاء إضافة قناة واحدة على الأقل قبل إضافة المنشورات!**")
+        return
+
+    temp_posts[user_id] = {
+        'chat_id': message.chat.id,
+        'message_id': message.id,
+        'media_group_id': str(message.media_group_id) if message.media_group_id else "None"
+    }
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📥 الطابور العادي", callback_data="post_type_queue")],
+        [InlineKeyboardButton("🔄 منشور مكرر", callback_data="post_type_recurring")],
+        [InlineKeyboardButton("❌ إلغاء", callback_data="action_cancel")]
+    ])
+
+    await message.reply_text("🎯 **حدد طريقة نشر هذا المحتوى:**", reply_markup=kb, quote=True)
+
+# ==================== 8. تشغيل البوت ====================
 
 async def main():
     init_db()
+    asyncio.create_task(publish_worker())
+    
     await app.start()
-    print("[✓] تم تشغيل البوت بنجاح!")
     
     try:
-        await app.delete_webhook(drop_pending_updates=True)
-    except Exception:
-        pass
-
-    await app.set_bot_commands([
-        BotCommand("start", "💎 القائمة الرئيسية")
-    ])
-
-    asyncio.create_task(publish_worker())
+        await app.set_bot_commands([
+            BotCommand("start", "تشغيل البوت وإظهار لوحة التحكم الرئيسية")
+        ])
+    except Exception as e:
+        print(f"[!] Commands set error: {e}")
+        
+    print("🚀 البوت شغال ومستعد لخدمتك!")
     await idle()
+    await app.stop()
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("تم الإيقاف.")
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
