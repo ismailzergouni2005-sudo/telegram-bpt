@@ -886,5 +886,13 @@ async def main():
     # إبقاء التشغيل حياً
     await asyncio.Event().wait()
 
+# ✅ التعديل الصحيح والمطابق لإصدارات بايثون الحديثة:
 if __name__ == "__main__":
-    asyncio.run(main())
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(main())
+    except KeyboardInterrupt:
+        pass
+    finally:
+        loop.close()
