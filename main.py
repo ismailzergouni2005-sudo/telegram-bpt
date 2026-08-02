@@ -410,8 +410,9 @@ async def handle_reply_buttons(client: Client, message: Message):
             [
                 InlineKeyboardButton("🕒 3 ساعات", callback_data="set_time_180"),
                 InlineKeyboardButton("🕔 5 ساعات", callback_data="set_time_300"),
-                InlineKeyboardButton("```python
-            ]
+                InlineKeyboardButton("🕛 12 ساعة", callback_data="set_time_720")
+            ],
+            [InlineKeyboardButton("✏️ إدخال عدد الدقائق يدوياً", callback_data="set_custom_time")]
         ])
         await message.reply_text(
             f"⏱️ **اختر الفارق الزمني المطلوبة:**\n*(الحالي: `{round(POST_INTERVAL/60, 1)}` دقيقة)*", 
@@ -775,12 +776,13 @@ async def auto_collect_all_types(client: Client, message: Message):
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("⏱️ 30 دقيقة", callback_data="rec_int_30"), InlineKeyboardButton("🕐 1 ساعة", callback_data="rec_int_60")],
             [InlineKeyboardButton("🕒 6 ساعات", callback_data="rec_int_360"), InlineKeyboardButton("```python
-            [InlineKeyboardButton("🕒 6 ساعات", callback_data="rec_int_360"), InlineKeyboardButton("🕛 24 ساعة", callback_data="rec_int_1440")]
+            [InlineKeyboardButton("🕒 6 ساعات", callback_data="rec_int_360"), InlineKeyboardButton("🕛 12 ساعة", callback_data="rec_int_720")],
+            [InlineKeyboardButton("📅 24 ساعة (يومياً)", callback_data="rec_int_1440")]
         ])
         await message.reply_text(
-            f"⏱️ **إعداد التكرار (الخطوة 2 من 3):**\n\n"
-            f"بدء النشر: `{start_time.strftime('%Y-%m-%d %I:%M %p')}`\n"
-            f"كم الفارق الزمني للتكرار بين كل منشور بالدقائق؟ (اختر أو اكتب الرقم):", reply_markup=kb
+            f"✅ **موعد البدء:** `{start_time.strftime('%Y-%m-%d %I:%M %p')}`\n\n"
+            f"⏱️ **إعداد التكرار (الخطوة 2 من 3):**\n"
+            f"اختر الفارق الزمني بين كل تكرار (أو اكتب الدقائق يدوياً):", reply_markup=kb
         )
         return
 
@@ -796,21 +798,22 @@ async def auto_collect_all_types(client: Client, message: Message):
             ])
             await message.reply_text(
                 f"🔄 **إعداد التكرار (الخطوة 3 من 3):**\n\n"
-                f"كم عدد مرات تكرار المنشور؟ (اختر من الأزرار أو اكتب الرقم، أو `-1` لغير محدود):", reply_markup=kb
+                f"الفارق المحدد: `{minutes}` دقيقة.\n"
+                f"كم عدد مرات تكرار المنشور؟ (اختر من الأسفل أو اكتب الرقم يدوياً):", reply_markup=kb
             )
             return
         except ValueError:
-            await message.reply_text("❌ يرجى إرسال أرقام الدقائق فقط.")
+            await message.reply_text("❌ أرسل رقماً صحيحاً بالدقائق.")
             return
 
     if state == "rec_step_repeats" and message.text:
         try:
             repeats = int(text.strip())
+            target_channels = get_channels()
             post_data = temp_posts.get(user_id)
             if post_data:
                 interval_sec = post_data.get('interval_sec', 3600)
                 next_run = post_data.get('next_run', datetime.now())
-                target_channels = get_channels()
 
                 add_recurring_db(
                     post_data['chat_id'], 
@@ -834,16 +837,16 @@ async def auto_collect_all_types(client: Client, message: Message):
                 user_states[user_id] = None
                 return
         except ValueError:
-            await message.reply_text("❌ يرجى كتابة الرقم بشكل صحيح.")
+            await message.reply_text("❌ أرسل رقماً صحيحاً لعدد التكرارات.")
             return
 
+    # استقبال المنشور الجديد (وسائط أو نصوص)
     target_channels = get_channels()
-
     if not target_channels:
-        await message.reply_text("⚠️ **أضف قناة واحدة على الأقل عبر `📢 إدارة القنوات` أولاً!**")
+        await message.reply_text("⚠️ **الرجاء إضافة قناة واحدة على الأقل قبل إضافة المنشورات!**", reply_markup=get_main_reply_keyboard())
         return
 
-    # حفظ بيانات الرسالة مؤقتاً لسؤال المستخدم عن نوعها
+    # حفظ الرسالة مؤقتاً للاختيار
     temp_posts[user_id] = {
         'chat_id': message.chat.id,
         'msg_id': message.id,
@@ -851,33 +854,38 @@ async def auto_collect_all_types(client: Client, message: Message):
     }
 
     type_keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📥 منشور عادي (طابور النشر)", callback_data="type_normal")],
-        [InlineKeyboardButton("🔄 منشور مكرر (توقيت وتكرار مخصص)", callback_data="type_recurring")]
+        [InlineKeyboardButton("📥 منشور عادي (طابور)", callback_data="type_normal")],
+        [InlineKeyboardButton("🔄 منشور مكرر (توقيت وجدولة)", callback_data="type_recurring")]
     ])
 
     await message.reply_text(
-        "✨ **وصل منشور جديد! كيف تريد إدراجه؟**",
+        "📥 **تم استقبال المنشور!**\nكيف تريد إضافة هذا المنشور؟",
+        reply_to_message_id=message.id,
         reply_markup=type_keyboard
     )
 
-# ==================== 8. التشغيل الأصلي ====================
+# ==================== 8. تشغيل البوت ====================
 
 async def main():
     init_db()
     await app.start()
 
-    try:
-        await app.set_bot_commands([
-            BotCommand("start", "الرئيسية 💎"),
-            BotCommand("help", "دليل الاستخدام 📖")
-        ])
-    except Exception as e:
-        print(f"Set commands note: {e}")
+    # إعداد أوامر البوت المنسدلة (Bot Commands Menu)
+    await app.set_bot_commands([
+        BotCommand("start", "تشغيل البوت وإظهار اللوحة الرئيسية"),
+        BotCommand("help", "عرض طريقة الاستخدام والتوجيهات")
+    ])
 
+    bot_info = await app.get_me()
+    print("==================================================")
+    print(f"🚀 Bot is Running 24/7 as @{bot_info.username}!")
+    print("==================================================")
+    
+    # تشغيل محرك النشر التلقائي في الخلفية
     asyncio.create_task(publish_worker())
-    print("🚀 البوت المطور مع التكرار يعمل الآن...")
+    
+    # إبقاء التشغيل حياً
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    asyncio.run(main())
