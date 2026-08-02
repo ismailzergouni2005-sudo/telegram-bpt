@@ -2,7 +2,7 @@ import os
 import asyncio
 import sqlite3
 from datetime import datetime, timedelta
-from pyrogram import Client, filters
+from pyrogram import Client, filters, idle
 from pyrogram.types import (
     Message, 
     InlineKeyboardMarkup, 
@@ -15,7 +15,6 @@ from pyrogram.types import (
 import threading
 from flask import Flask
 import nest_asyncio
-import asyncio
 
 # إنشاء Event Loop رئيسي قبل استيراد pyrogram لتفادي خطأ Python 3.14
 try:
@@ -84,7 +83,6 @@ def init_db():
             channels TEXT
         )
     """)
-    # جدول المنشورات المكررة
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS recurring_posts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,7 +95,6 @@ def init_db():
             remaining_repeats INTEGER
         )
     """)
-    # جدول إحصائيات النشر لكل قناة
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS publish_stats (
             channel_username TEXT PRIMARY KEY,
@@ -106,14 +103,12 @@ def init_db():
         )
     """)
 
-    # ---- ترحيل تلقائي: إضافة أي أعمدة ناقصة في جداول قديمة تم إنشاؤها بنسخة سابقة ----
     def ensure_columns(table, required_columns):
         cursor.execute(f"PRAGMA table_info({table})")
         existing_cols = {row[1] for row in cursor.fetchall()}
         for col_name, col_type in required_columns:
             if col_name not in existing_cols:
                 cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}")
-                print(f"[migration] تمت إضافة العمود '{col_name}' إلى جدول '{table}'")
 
     ensure_columns("queue", [
         ("chat_id", "INTEGER"),
@@ -154,7 +149,6 @@ def get_stats():
     return rows
 
 def move_queue_item_to_end(queue_id):
-    """تحريك منشور من مقدمة الطابور إلى نهايته (تخطي مؤقت)"""
     conn = sqlite3.connect("bot_data.db")
     cursor = conn.cursor()
     cursor.execute("SELECT chat_id, message_id, media_group_id, channels FROM queue WHERE id = ?", (queue_id,))
@@ -289,7 +283,6 @@ async def publish_item(chat_id, msg_id, media_group_id, channels_list):
             else:
                 await app.copy_message(chat_id=ch, from_chat_id=chat_id, message_id=msg_id)
 
-            # إرسال التوقيع/الحقوق التلقائية إن وجدت
             if custom_footer:
                 try:
                     await app.send_message(chat_id=ch, text=custom_footer)
@@ -309,7 +302,6 @@ async def publish_worker():
             now = datetime.now()
             now_ts = now.timestamp()
 
-            # 1. فحص المنشورات المكررة المؤطرة بزمن معين
             recurring_items = get_recurring_db()
             for r in recurring_items:
                 r_id, chat_id, msg_id, media_group_id, chs_str, next_run_ts, interval_sec, remaining = r
@@ -317,12 +309,10 @@ async def publish_worker():
                     channels = chs_str.split(",")
                     await publish_item(chat_id, msg_id, media_group_id, channels)
                     
-                    # حساب التكرار القادم
-                    new_remaining = remaining - 1 if remaining > 0 else -1 # -1 يعني لا نهائي
+                    new_remaining = remaining - 1 if remaining > 0 else -1
                     next_ts = now_ts + interval_sec
                     update_recurring_next_run(r_id, next_ts, new_remaining)
 
-            # 2. فحص الطابور الاعتيادي
             if not is_paused:
                 queue_items = get_queue_db()
                 if queue_items:
@@ -368,15 +358,12 @@ async def help_cmd(client: Client, message: Message):
     await message.reply_text(
         "📖 **دليل استخدام البوت:**\n\n"
         "1️⃣ أضف قنواتك من `📢 إدارة القنوات`.\n"
-        "2️⃣ أرسل أي منشور للبوت (نص/صورة/فيديو) ثم اختر نوعه:\n"
-        "   • `منشور عادي` → يدخل الطابور وينشر تلقائياً حسب الفارق الزمني.\n"
-        "   • `منشور مكرر` → يُنشر في وقت محدد ويتكرر حسب المدة وعدد المرات.\n"
+        "2️⃣ أرسل أي منشور للبوت (نص/صورة/فيديو) ثم اختر نوعه.\n"
         "3️⃣ تحكم بسرعة النشر من `⏱️ تغيير الفارق الزمني`.\n"
-        "4️⃣ راقب الطابور من `📊 حالة النشر والطابور`، ومن هناك يمكنك:\n"
-        "   نشر أي منشور فوراً، تأجيله لنهاية الطابور، أو حذفه.\n"
-        "5️⃣ فعّل توقيعاً تلقائياً يُرسل كرسالة بعد كل منشور من `🎨 إعداد الحقوق والتوقيع`.\n"
-        "6️⃣ تابع أداء النشر لكل قناة من `📈 إحصائيات النشر`.\n"
-        "7️⃣ استخدم `▶️/⏸️` للتحكم بتشغيل أو إيقاف محرك النشر في أي وقت.",
+        "4️⃣ راقب الطابور من `📊 حالة النشر والطابور`.\n"
+        "5️⃣ فعّل توقيعاً تلقائياً من `🎨 إعداد الحقوق والتوقيع`.\n"
+        "6️⃣ تابع الأداء من `📈 إحصائيات النشر`.\n"
+        "7️⃣ استخدم `▶️/⏸️` للتحكم بتشغيل أو إيقاف المحرك.",
         reply_markup=get_main_reply_keyboard()
     )
 
@@ -421,7 +408,7 @@ async def handle_reply_buttons(client: Client, message: Message):
             [
                 InlineKeyboardButton("🕒 3 ساعات", callback_data="set_time_180"),
                 InlineKeyboardButton("🕔 5 ساعات", callback_data="set_time_300"),
-                InlineKeyboardButton("🕛 12 ساعة", callback_data="set_time_720")
+                InlineKeyboardButton("            InlineKeyboardButton("720")
             ],
             [InlineKeyboardButton("✏️ إدخال عدد الدقائق يدوياً", callback_data="set_custom_time")]
         ])
@@ -567,7 +554,6 @@ async def callback_handler(client: Client, query: CallbackQuery):
             await query.answer("تمت الإزالة!", show_alert=True)
             await query.message.edit_text("✅ تم إزالة الحقوق والتوقيع التلقائي.")
 
-        # اختيار نوع المنشور (عادي أم مكرر)
         elif data == "type_normal":
             post_data = temp_posts.get(user_id)
             if post_data:
@@ -576,13 +562,13 @@ async def callback_handler(client: Client, query: CallbackQuery):
                 await query.message.edit_text(f"📥 **تم إدراج المنشور بنجاح في الطابور عادي!**\nترتيبه الحالي: `{queue_len}`")
                 del temp_posts[user_id]
             else:
-                await query.answer("⚠️ انتهت صلاحية هذا المنشور (ربما أعيد تشغيل البوت)، أرسله مجدداً.", show_alert=True)
+                await query.answer("⚠️ انتهت صلاحية هذا المنشور، أرسله مجدداً.", show_alert=True)
                 await query.message.edit_text("❌ **تعذّر إدراج المنشور.**\nيرجى إرسال المنشور مرة أخرى ثم اختيار نوعه من جديد.")
 
         elif data == "type_recurring":
             post_data = temp_posts.get(user_id)
             if not post_data:
-                await query.answer("⚠️ انتهت صلاحية هذا المنشور (ربما أعيد تشغيل البوت)، أرسله مجدداً.", show_alert=True)
+                await query.answer("⚠️ انتهت صلاحية هذا المنشور، أرسله مجدداً.", show_alert=True)
                 await query.message.edit_text("❌ **تعذّر بدء إعداد التكرار.**\nيرجى إرسال المنشور مرة أخرى ثم اختيار نوعه من جديد.")
             else:
                 user_states[user_id] = "rec_step_time"
@@ -592,7 +578,6 @@ async def callback_handler(client: Client, query: CallbackQuery):
                     "*(ملاحظة: إذا كنت تريده البدء فوراً اكتب `0`)*"
                 )
 
-        # اختيار الفارق الزمني السريع للتكرار
         elif data.startswith("rec_int_"):
             minutes = int(data.split("_")[-1])
             if user_id in temp_posts:
@@ -609,7 +594,6 @@ async def callback_handler(client: Client, query: CallbackQuery):
                     f"كم عدد مرات تكرار المنشور؟ (اختر أو اكتب الرقم):", reply_markup=kb
                 )
 
-        # اختيار عدد التكرارات السريع
         elif data.startswith("rec_rep_"):
             repeats = int(data.split("_")[-1])
             post_data = temp_posts.get(user_id)
@@ -727,10 +711,6 @@ async def callback_handler(client: Client, query: CallbackQuery):
 
     except Exception as e:
         print(f"[!] خطأ في callback_handler ({data}): {e}")
-        try:
-            await query.answer(f"❌ حدث خطأ: {e}", show_alert=True)
-        except Exception:
-            pass
 
 # ==================== 7. استقبال البيانات والخطوات ====================
 
@@ -742,7 +722,7 @@ async def auto_collect_all_types(client: Client, message: Message):
     state = user_states.get(user_id)
 
     if state == "waiting_add_channel" and message.text:
-        clean_text = text.replace("[https://t.me/](https://t.me/)", "").replace("t.me/", "").strip("@ ")
+        clean_text = text.replace("https://t.me/", "").replace("t.me/", "").strip("@ ")
         ch = f"@{clean_text}"
         add_channel_db(ch)
         await message.reply_text(f"✅ تم إضافة القناة `{ch}` بنجاح!", reply_markup=get_main_reply_keyboard())
@@ -766,7 +746,6 @@ async def auto_collect_all_types(client: Client, message: Message):
         await message.reply_text(f"✅ **تم حفظ الحقوق:**\n`{custom_footer}`", reply_markup=get_main_reply_keyboard())
         return
 
-    # معالجة خطوات التكرار
     if state == "rec_step_time" and message.text:
         now = datetime.now()
         if text.strip() == "0":
@@ -786,14 +765,9 @@ async def auto_collect_all_types(client: Client, message: Message):
 
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("⏱️ 30 دقيقة", callback_data="rec_int_30"), InlineKeyboardButton("🕐 1 ساعة", callback_data="rec_int_60")],
-            [InlineKeyboardButton("🕒 6 ساعات", callback_data="rec_int_360"), InlineKeyboardButton("🕛 12 ساعة", callback_data="rec_int_720")],
-            [InlineKeyboardButton("📅 24 ساعة (يومياً)", callback_data="rec_int_1440")]
+            [InlineKeyboardButton("🕒 6 ساعات", callback_data="rec_int_360"), InlineKeyboardButton("12 ساعة", callback_data="rec_int_720")]
         ])
-        await message.reply_text(
-            f"✅ **موعد البدء:** `{start_time.strftime('%Y-%m-%d %I:%M %p')}`\n\n"
-            f"⏱️ **إعداد التكرار (الخطوة 2 من 3):**\n"
-            f"اختر الفارق الزمني بين كل تكرار (أو اكتب الدقائق يدوياً):", reply_markup=kb
-        )
+        await message.reply_text("⏱️ **إعداد التكرار (الخطوة 2 من 3):**\n\nاختر أو اكتب الفارق الزمني بالدقائق بين كل منشور:", reply_markup=kb)
         return
 
     if state == "rec_step_interval" and message.text:
@@ -809,21 +783,21 @@ async def auto_collect_all_types(client: Client, message: Message):
             await message.reply_text(
                 f"🔄 **إعداد التكرار (الخطوة 3 من 3):**\n\n"
                 f"الفارق المحدد: `{minutes}` دقيقة.\n"
-                f"كم عدد مرات تكرار المنشور؟ (اختر من الأسفل أو اكتب الرقم يدوياً):", reply_markup=kb
+                f"كم عدد مرات تكرار المنشور؟ (اختر أو اكتب الرقم):", reply_markup=kb
             )
             return
         except ValueError:
-            await message.reply_text("❌ أرسل رقماً صحيحاً بالدقائق.")
+            await message.reply_text("❌ يرجى كتابة أرقام فقط (مثال: 60).")
             return
 
     if state == "rec_step_repeats" and message.text:
         try:
             repeats = int(text.strip())
-            target_channels = get_channels()
             post_data = temp_posts.get(user_id)
             if post_data:
                 interval_sec = post_data.get('interval_sec', 3600)
                 next_run = post_data.get('next_run', datetime.now())
+                target_channels = get_channels()
 
                 add_recurring_db(
                     post_data['chat_id'], 
@@ -847,63 +821,53 @@ async def auto_collect_all_types(client: Client, message: Message):
                 user_states[user_id] = None
                 return
         except ValueError:
-            await message.reply_text("❌ أرسل رقماً صحيحاً لعدد التكرارات.")
+            await message.reply_text("❌ اكتب رقماً صحيحاً (أو -1 لتكرار غير محدود).")
             return
 
-    # استقبال المنشور الجديد (وسائط أو نصوص)
-    target_channels = get_channels()
-    if not target_channels:
-        await message.reply_text("⚠️ **الرجاء إضافة قناة واحدة على الأقل قبل إضافة المنشورات!**", reply_markup=get_main_reply_keyboard())
-        return
+    # استقبال أي منشور جديد من الآدمن
+    if not state and not message.text in BUTTON_TEXTS:
+        temp_posts[user_id] = {
+            'chat_id': message.chat.id,
+            'msg_id': message.id,
+            'media_group_id': str(message.media_group_id) if message.media_group_id else None
+        }
 
-    # حفظ الرسالة مؤقتاً للاختيار
-    temp_posts[user_id] = {
-        'chat_id': message.chat.id,
-        'msg_id': message.id,
-        'media_group_id': message.media_group_id
-    }
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🟢 منشور عادي (جدولة)", callback_data="type_normal")],
+            [InlineKeyboardButton("🔄 منشور مكرر", callback_data="type_recurring")]
+        ])
 
-    type_keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📥 منشور عادي (طابور)", callback_data="type_normal")],
-        [InlineKeyboardButton("🔄 منشور مكرر (توقيت وجدولة)", callback_data="type_recurring")]
-    ])
+        await message.reply_text("📥 **تم استلام المنشور!**\nاختر كيف تريد نشر هذا المنشور:", reply_markup=kb)
 
-    await message.reply_text(
-        "📥 **تم استقبال المنشور!**\nكيف تريد إضافة هذا المنشور؟",
-        reply_to_message_id=message.id,
-        reply_markup=type_keyboard
-    )
-
-# ==================== 8. تشغيل البوت ====================
+# ==================== 8. نقطة التشغيل الرئيسية (Main) ====================
 
 async def main():
     init_db()
+    
+    # 1. تشغيل عميل Pyrogram
     await app.start()
+    print("[✓] تم تشغيل بوت تيليجرام بنجاح!")
+    
+    # 2. حرق الـ Webhook القديم لضمان عمل البوت في وضع Long Polling بدون مشاكل
+    try:
+        await app.delete_webhook(drop_pending_updates=True)
+    except Exception:
+        pass
 
-    # إعداد أوامر البوت المنسدلة (Bot Commands Menu)
+    # 3. إعداد الأوامر المتاحة للبوت
     await app.set_bot_commands([
-        BotCommand("start", "تشغيل البوت وإظهار اللوحة الرئيسية"),
-        BotCommand("help", "عرض طريقة الاستخدام والتوجيهات")
+        BotCommand("start", "💎 تشغيل البوت وعرض القائمة الرئيسية"),
+        BotCommand("help", "📖 دليل استخدام البوت والتعليمات")
     ])
 
-    bot_info = await app.get_me()
-    print("==================================================")
-    print(f"🚀 Bot is Running 24/7 as @{bot_info.username}!")
-    print("==================================================")
-    
-    # تشغيل محرك النشر التلقائي في الخلفية
+    # 4. تشغيل محرك النشر التلقائي في الخلفية
     asyncio.create_task(publish_worker())
-    
-    # إبقاء التشغيل حياً
-    await asyncio.Event().wait()
 
-# ✅ التعديل الصحيح والمطابق لإصدارات بايثون الحديثة:
+    # 5. الاستماع الدائم للأحداث والأوامر (الإصلاح الجذري للمشكلة)
+    await idle()
+
 if __name__ == "__main__":
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     try:
         loop.run_until_complete(main())
     except KeyboardInterrupt:
-        pass
-    finally:
-        loop.close()
+        print("تم إيقاف البوت.")
