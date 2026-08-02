@@ -250,14 +250,19 @@ def format_time_label(seconds):
 
 def build_recurring_main_kb(user_id):
     data = temp_posts.get(user_id, {})
-    start_sec = data.get('rec_start', 0)
+    rec_ts = data.get('rec_start_ts', None)
     interval_sec = data.get('rec_interval', 3600)
     repeats_val = data.get('rec_repeats', -1)
+
+    if rec_ts is None:
+        start_str = "فوري (الآن)"
+    else:
+        start_str = datetime.fromtimestamp(rec_ts).strftime('%H:%M %Y-%m-%d')
 
     repeats_str = "♾️ غير محدود" if repeats_val == -1 else f"{repeats_val} مرة"
 
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"⏰ بدء النشر: {format_time_label(start_sec)}", callback_data="rec_menu_start")],
+        [InlineKeyboardButton(f"⏰ بدء النشر: {start_str}", callback_data="rec_menu_start")],
         [InlineKeyboardButton(f"⏱️ الزمن بين التكرارات: {format_time_label(interval_sec)}", callback_data="rec_menu_interval")],
         [InlineKeyboardButton(f"🔁 عدد التكرارات: {repeats_str}", callback_data="rec_menu_repeats")],
         [InlineKeyboardButton("✅ تأكيد وجدولة النشر", callback_data="rec_confirm_save")],
@@ -271,11 +276,11 @@ def build_edit_recurring_kb(r_id, user_id):
     interval_sec = p.get('interval_sec', 3600)
     remaining = p.get('remaining', -1)
 
-    dt_str = datetime.fromtimestamp(next_ts).strftime('%H:%M - %Y/%m/%d')
+    dt_str = datetime.fromtimestamp(next_ts).strftime('%H:%M %Y-%m-%d (24H)')
     rem_str = "غير محدود" if remaining == -1 else f"{remaining} مرة"
 
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"⏰ موعد التكرار القادم: {dt_str}", callback_data=f"edit_field_start_{r_id}")],
+        [InlineKeyboardButton(f"⏰ موعد بدء النشر: {dt_str}", callback_data=f"edit_field_start_{r_id}")],
         [InlineKeyboardButton(f"⏱️ الزمن بين التكرارات: {format_time_label(interval_sec)}", callback_data=f"edit_field_int_{r_id}")],
         [InlineKeyboardButton(f"🔁 عدد المرات: {rem_str}", callback_data=f"edit_field_rep_{r_id}")],
         [InlineKeyboardButton("✅ حفظ التعديلات", callback_data=f"edit_save_{r_id}")],
@@ -577,16 +582,21 @@ async def callback_handler(client: Client, query: CallbackQuery):
                 [InlineKeyboardButton("⚡ فوري (الآن)", callback_data=f"set_edit_start_{r_id}_0"), InlineKeyboardButton("⏱️ 5 دقائق", callback_data=f"set_edit_start_{r_id}_300")],
                 [InlineKeyboardButton("⏱️ 30 دقيقة", callback_data=f"set_edit_start_{r_id}_1800"), InlineKeyboardButton("🕐 ساعة", callback_data=f"set_edit_start_{r_id}_3600")],
                 [InlineKeyboardButton("🕒 5 ساعات", callback_data=f"set_edit_start_{r_id}_18000"), InlineKeyboardButton("🕕 6 ساعات", callback_data=f"set_edit_start_{r_id}_21600")],
-                [InlineKeyboardButton("🕛 12 ساعة", callback_data=f"set_edit_start_{r_id}_43200"), InlineKeyboardButton("🗓️ 24 ساعة", callback_data=f"set_edit_start_{r_id}_86400")],
-                [InlineKeyboardButton("✏️ إدخال يدوي (بالدقائق)", callback_data=f"custom_edit_start_{r_id}")],
+                [InlineKeyboardButton("🗓️ أدخل الوقت والتاريخ بتنسيق 24H", callback_data=f"custom_edit_start_{r_id}")],
                 [InlineKeyboardButton("🔙 رجوع", callback_data=f"edit_rec_{r_id}")]
             ])
-            await query.message.edit_text("⏰ **اختر الموعد القادم الجديد أو أدخله يدوياً:**", reply_markup=kb)
+            await query.message.edit_text("⏰ **اختر الموعد الجديد لجميع التكرارات القادمة:**", reply_markup=kb)
 
         elif data.startswith("custom_edit_start_"):
             r_id = int(data.replace("custom_edit_start_", ""))
             user_states[user_id] = f"waiting_custom_edit_start_{r_id}"
-            await query.message.edit_text("✏️ **أرسل وقت البدء بعد كم دقيقة من الآن (أرقام فقط):**\n*(مثال: أرسل `45` لبدء النشر بعد 45 دقيقة)*")
+            await query.message.edit_text(
+                "📅 **أدخل موعد بدء النشر الجديد بتنسيق 24 ساعة:**\n"
+                "───────────────────\n"
+                "💡 **الصيغة المطلوبة:** `HH:MM YYYY-MM-DD`\n"
+                "*(مثال: `14:30 2026-08-02` للبدء الساعة 2:30 مساءً)*\n"
+                "أو يمكنك كتابة الوقت فقط لليوم: `14:30`"
+            )
 
         elif data.startswith("set_edit_start_"):
             parts = data.replace("set_edit_start_", "").split("_")
@@ -719,7 +729,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
 
         # خيارات إعداد المنشور المكرر الجديد
         elif data == "post_type_recurring":
-            temp_posts[user_id]['rec_start'] = 0
+            temp_posts[user_id]['rec_start_ts'] = None
             temp_posts[user_id]['rec_interval'] = 3600
             temp_posts[user_id]['rec_repeats'] = -1
             await query.message.edit_text(
@@ -732,15 +742,14 @@ async def callback_handler(client: Client, query: CallbackQuery):
                 [InlineKeyboardButton("⚡ فوري (الآن)", callback_data="rec_set_start_0"), InlineKeyboardButton("⏱️ 5 دقائق", callback_data="rec_set_start_300")],
                 [InlineKeyboardButton("⏱️ 30 دقيقة", callback_data="rec_set_start_1800"), InlineKeyboardButton("🕐 ساعة", callback_data="rec_set_start_3600")],
                 [InlineKeyboardButton("🕒 5 ساعات", callback_data="rec_set_start_18000"), InlineKeyboardButton("🕕 6 ساعات", callback_data="rec_set_start_21600")],
-                [InlineKeyboardButton("🕛 12 ساعة", callback_data="rec_set_start_43200"), InlineKeyboardButton("🗓️ 24 ساعة", callback_data="rec_set_start_86400")],
-                [InlineKeyboardButton("✏️ إدخال يدوي (بالدقائق)", callback_data="rec_custom_start")],
+                [InlineKeyboardButton("🗓️ أدخل الوقت والتاريخ بتنسيق 24H", callback_data="rec_custom_start")],
                 [InlineKeyboardButton("🔙 رجوع", callback_data="post_type_recurring")]
             ])
             await query.message.edit_text("⏰ **اختر موعد أول نشر:**", reply_markup=kb)
 
         elif data.startswith("rec_set_start_"):
             sec = int(data.replace("rec_set_start_", ""))
-            temp_posts[user_id]['rec_start'] = sec
+            temp_posts[user_id]['rec_start_ts'] = datetime.now().timestamp() + sec
             await query.message.edit_text(
                 "🔄 **إعداد جدول النشر المكرر:**\n───────────────────\nقم بضبط تفاصيل التكرار أدناه:",
                 reply_markup=build_recurring_main_kb(user_id)
@@ -748,7 +757,13 @@ async def callback_handler(client: Client, query: CallbackQuery):
 
         elif data == "rec_custom_start":
             user_states[user_id] = "waiting_rec_custom_start"
-            await query.message.edit_text("✏️ **أرسل وقت أول نشر بعد كم دقيقة من الآن (أرقام فقط):**\n*(مثال: `30` لبدء النشر بعد 30 دقيقة)*")
+            await query.message.edit_text(
+                "📅 **أدخل موعد بدء النشر الأولي بتنسيق 24 ساعة:**\n"
+                "───────────────────\n"
+                "💡 **الصيغة المطلوبة:** `HH:MM YYYY-MM-DD`\n"
+                "*(مثال: `15:30 2026-08-02` للبدء الساعة 3:30 مساءً)*\n"
+                "أو يمكنك كتابة الوقت فقط لليوم: `15:30`"
+            )
 
         elif data == "rec_menu_interval":
             kb = InlineKeyboardMarkup([
@@ -796,7 +811,12 @@ async def callback_handler(client: Client, query: CallbackQuery):
         elif data == "rec_confirm_save":
             if user_id in temp_posts:
                 post = temp_posts[user_id]
-                start_dt = datetime.now() + timedelta(seconds=post['rec_start'])
+                rec_ts = post.get('rec_start_ts')
+                if rec_ts is None:
+                    start_dt = datetime.now()
+                else:
+                    start_dt = datetime.fromtimestamp(rec_ts)
+
                 add_recurring_db(
                     chat_id=post['chat_id'],
                     message_id=post['message_id'],
@@ -836,6 +856,22 @@ async def callback_handler(client: Client, query: CallbackQuery):
 
 # ==================== 7. استقبال المنشورات ومدخلات النصوص ====================
 
+def parse_24h_datetime(text_input):
+    text_input = text_input.strip()
+    now = datetime.now()
+    try:
+        if len(text_input.split()) == 1 and ":" in text_input:
+            t = datetime.strptime(text_input, "%H:%M")
+            target_dt = now.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
+            if target_dt < now:
+                target_dt += timedelta(days=1)
+            return target_dt
+        elif len(text_input.split()) == 2:
+            return datetime.strptime(text_input, "%H:%M %Y-%m-%d")
+    except Exception:
+        return None
+    return None
+
 @app.on_message(admin_filter)
 async def handle_incoming_messages(client: Client, message: Message):
     global user_states, temp_posts, POST_INTERVAL
@@ -863,14 +899,20 @@ async def handle_incoming_messages(client: Client, message: Message):
         await message.reply_text(f"✅ **تم ضبط الفارق الزمني للنشر إلى `{message.text}` دقيقة.**", reply_markup=get_main_reply_keyboard())
         return
 
-    # 3. إدخال يدوي لوقت أول تكرار (إنشاء)
+    # 3. إدخال يدوي لوقت أول تكرار (إنشاء - صيغة 24 ساعة)
     elif state == "waiting_rec_custom_start":
-        if not message.text.isdigit():
-            await message.reply_text("⚠️ **يرجى إدخال رقم صحيح.**")
+        parsed_dt = parse_24h_datetime(message.text)
+        if not parsed_dt:
+            await message.reply_text(
+                "⚠️ **صيغة التاريخ غير صحيحة!**\n"
+                "يرجى الإدخال بتنسيق 24 ساعة مثل:\n"
+                "• `15:30 2026-08-02`\n"
+                "• أو وقت اليوم فقط: `15:30`"
+            )
             return
-        temp_posts[user_id]['rec_start'] = int(message.text) * 60
+        temp_posts[user_id]['rec_start_ts'] = parsed_dt.timestamp()
         user_states[user_id] = None
-        await message.reply_text("🔄 **تم تحديث الوقت، اضغط تأكيد للإنهاء:**", reply_markup=build_recurring_main_kb(user_id))
+        await message.reply_text(f"🔄 **تم ضبط موعد البدء على:** `{parsed_dt.strftime('%H:%M %Y-%m-%d')}`", reply_markup=build_recurring_main_kb(user_id))
         return
 
     # 4. إدخال يدوي للفاصل الزمني (إنشاء)
@@ -896,12 +938,17 @@ async def handle_incoming_messages(client: Client, message: Message):
     # 6. إدخالات التعديل المخصص
     elif state and state.startswith("waiting_custom_edit_start_"):
         r_id = int(state.replace("waiting_custom_edit_start_", ""))
-        if not message.text.isdigit():
-            await message.reply_text("⚠️ **يرجى إدخال رقم صحيح.**")
+        parsed_dt = parse_24h_datetime(message.text)
+        if not parsed_dt:
+            await message.reply_text(
+                "⚠️ **صيغة التاريخ غير صحيحة!**\n"
+                "يرجى الإدخال بتنسيق 24 ساعة مثل:\n"
+                "• `15:30 2026-08-02`\n"
+                "• أو وقت اليوم فقط: `15:30`"
+            )
             return
-        sec = int(message.text) * 60
         if user_id in edit_posts:
-            edit_posts[user_id]['next_ts'] = datetime.now().timestamp() + sec
+            edit_posts[user_id]['next_ts'] = parsed_dt.timestamp()
         user_states[user_id] = None
         await message.reply_text(f"✏️ **تعديل المنشور المكرر #{r_id}**", reply_markup=build_edit_recurring_kb(r_id, user_id))
         return
