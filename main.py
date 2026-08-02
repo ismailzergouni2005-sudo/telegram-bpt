@@ -841,6 +841,8 @@ async def auto_collect_all_types(client: Client, message: Message):
 
 # ==================== 8. نقطة التشغيل الرئيسية (Main) ====================
 
+# ==================== 8. نقطة التشغيل الرئيسية (Main) ====================
+
 async def main():
     init_db()
     
@@ -863,11 +865,11 @@ async def main():
     # 4. تشغيل محرك النشر التلقائي في الخلفية
     asyncio.create_task(publish_worker())
 
-    # 5. الاستماع الدائم للأحداث والأوامر (الإصلاح الجذري للمشكلة)
+    # 5. الاستماع الدائم للأحداث والأوامر
     await idle()
 
 if __name__ == "__main__":
     try:
-        loop.run_until_complete(main())
+        asyncio.run(main())
     except KeyboardInterrupt:
         print("تم إيقاف البوت.")
