@@ -14,6 +14,17 @@ from pyrogram.types import (
 )
 import threading
 from flask import Flask
+import nest_asyncio
+import asyncio
+
+# إنشاء Event Loop رئيسي قبل استيراد pyrogram لتفادي خطأ Python 3.14
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+nest_asyncio.apply()
 
 # ==================== خادم الويب المتوافق مع Render ====================
 web_app = Flask('')
