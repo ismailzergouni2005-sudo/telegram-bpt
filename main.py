@@ -565,7 +565,6 @@ async def callback_handler(client: Client, query: CallbackQuery):
                 await query.answer("⚠️ انتهت صلاحية هذا المنشور، أرسله مجدداً.", show_alert=True)
                 await query.message.edit_text("❌ **تعذّر إدراج المنشور.**\nيرجى إرسال المنشور مرة أخرى ثم اختيار نوعه من جديد.")
 
-        # --- بداية التعديل الواجهة المطلوبة ---
         elif data == "type_recurring":
             post_data = temp_posts.get(user_id)
             if not post_data:
@@ -584,10 +583,10 @@ async def callback_handler(client: Client, query: CallbackQuery):
         elif data == "rec_start_now":
             if user_id in temp_posts:
                 temp_posts[user_id]['next_run'] = datetime.now()
-                user_states[user_id] = "rec_step_interval"
                 kb = InlineKeyboardMarkup([
                     [InlineKeyboardButton("⏱️ 30 دقيقة", callback_data="rec_int_30"), InlineKeyboardButton("🕐 1 ساعة", callback_data="rec_int_60")],
-                    [InlineKeyboardButton("🕒 6 ساعات", callback_data="rec_int_360"), InlineKeyboardButton("12 ساعة", callback_data="rec_int_720")]
+                    [InlineKeyboardButton("🕒 6 ساعات", callback_data="rec_int_360"), InlineKeyboardButton("12 ساعة", callback_data="rec_int_720")],
+                    [InlineKeyboardButton("✏️ إدخال عدد الدقائق يدوياً", callback_data="rec_custom_interval")]
                 ])
                 await query.message.edit_text(
                     "⚡ **تم اختيار البدء فوراً.**\n\n"
@@ -621,16 +620,25 @@ async def callback_handler(client: Client, query: CallbackQuery):
             )
 
         elif data == "rec_set_interval_time":
-            user_states[user_id] = "rec_step_interval"
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("⏱️ 30 دقيقة", callback_data="rec_int_30"), InlineKeyboardButton("🕐 1 ساعة", callback_data="rec_int_60")],
-                [InlineKeyboardButton("🕒 6 ساعات", callback_data="rec_int_360"), InlineKeyboardButton("12 ساعة", callback_data="rec_int_720")]
+                [InlineKeyboardButton("🕒 6 ساعات", callback_data="rec_int_360"), InlineKeyboardButton("12 ساعة", callback_data="rec_int_720")],
+                [InlineKeyboardButton("✏️ إدخال عدد الدقائق يدوياً من عندك", callback_data="rec_custom_interval")]
             ])
             await query.message.edit_text(
-                "🔄 **الوقت بين كل تكرار وآخر:**\n\nاختر من القائمة أو اكتب عدد الدقائق يدوياً:",
+                "🔄 **الوقت بين كل تكرار وآخر:**\n\nاختر من القائمة أو اضغط زر الإدخال اليدوي لتحديد وقتك الخاص:",
                 reply_markup=kb
             )
-        # --- نهاية التعديل الواجهة المطلوبة ---
+
+        elif data == "rec_custom_interval":
+            user_states[user_id] = "rec_step_interval"
+            await query.message.edit_text(
+                "✏️ **أرسل الآن الفارق الزمني بالدقائق من عندك:**\n\n"
+                "💡 **أمثلة:**\n"
+                "• أرسل `15` لتكرار كل 15 دقيقة\n"
+                "• أرسل `45` لتكرار كل 45 دقيقة\n"
+                "• أرسل `90` لتكرار كل ساعة ونصف"
+            )
 
         elif data.startswith("rec_int_"):
             minutes = int(data.split("_")[-1])
@@ -813,11 +821,11 @@ async def auto_collect_all_types(client: Client, message: Message):
 
         if user_id in temp_posts:
             temp_posts[user_id]['next_run'] = start_time
-            user_states[user_id] = "rec_step_interval"
 
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("⏱️ 30 دقيقة", callback_data="rec_int_30"), InlineKeyboardButton("🕐 1 ساعة", callback_data="rec_int_60")],
-                [InlineKeyboardButton("🕒 6 ساعات", callback_data="rec_int_360"), InlineKeyboardButton("12 ساعة", callback_data="rec_int_720")]
+                [InlineKeyboardButton("🕒 6 ساعات", callback_data="rec_int_360"), InlineKeyboardButton("12 ساعة", callback_data="rec_int_720")],
+                [InlineKeyboardButton("✏️ إدخال عدد الدقائق يدوياً من عندك", callback_data="rec_custom_interval")]
             ])
             await message.reply_text(
                 f"✅ تم تحديد وقت البدء: `{start_time.strftime('%H:%M')}`\n\n"
@@ -825,6 +833,7 @@ async def auto_collect_all_types(client: Client, message: Message):
                 "اختر أو اكتب الفارق الزمني بالدقائق بين كل منشور:", 
                 reply_markup=kb
             )
+            user_states[user_id] = None
         return
 
     if state == "rec_step_interval" and message.text:
@@ -845,7 +854,7 @@ async def auto_collect_all_types(client: Client, message: Message):
                 )
             return
         except ValueError:
-            await message.reply_text("❌ يرجى كتابة أرقام فقط (مثال: 60).")
+            await message.reply_text("❌ يرجى كتابة أرقام فقط (مثال: 15 أو 45).")
             return
 
     if state == "rec_step_repeats" and message.text:
