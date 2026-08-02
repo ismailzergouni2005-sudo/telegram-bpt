@@ -16,7 +16,7 @@ import threading
 from flask import Flask
 import nest_asyncio
 
-# إنشاء Event Loop رئيسي قبل استيراد pyrogram لتفادي خطأ Python 3.14
+# إنشاء Event Loop رئيسي قبل استيراد pyrogram لتفادي خطأ Python
 try:
     asyncio.get_event_loop()
 except RuntimeError:
@@ -468,7 +468,7 @@ async def handle_reply_buttons(client: Client, message: Message):
         buttons = []
         for idx, r in enumerate(recs, 1):
             r_id, chat_id, msg_id, media_group_id, chs_str, next_run_ts, interval_sec, remaining = r
-            dt_str = datetime.fromtimestamp(next_run_ts).strftime("%Y-%m-%d %I:%M %p")
+            dt_str = datetime.fromtimestamp(next_run_ts).strftime("%Y-%m-%d %H:%M")
             rep_str = f"{remaining} مرة" if remaining > 0 else "غير محدود ♾️"
             interval_min = round(interval_sec / 60, 1)
             
@@ -565,18 +565,72 @@ async def callback_handler(client: Client, query: CallbackQuery):
                 await query.answer("⚠️ انتهت صلاحية هذا المنشور، أرسله مجدداً.", show_alert=True)
                 await query.message.edit_text("❌ **تعذّر إدراج المنشور.**\nيرجى إرسال المنشور مرة أخرى ثم اختيار نوعه من جديد.")
 
+        # --- بداية التعديل الواجهة المطلوبة ---
         elif data == "type_recurring":
             post_data = temp_posts.get(user_id)
             if not post_data:
                 await query.answer("⚠️ انتهت صلاحية هذا المنشور، أرسله مجدداً.", show_alert=True)
-                await query.message.edit_text("❌ **تعذّر بدء إعداد التكرار.**\nيرجى إرسال المنشور مرة أخرى ثم اختيار نوعه من جديد.")
+                await query.message.edit_text("❌ **تعذّر بدء إعداد التكرار.**\nيرجى إرسال المنشور مرة أخرى.")
             else:
-                user_states[user_id] = "rec_step_time"
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🟢 نشر الآن", callback_data="rec_start_now")],
+                    [InlineKeyboardButton("⏰ جدولة وتحديد وقت", callback_data="rec_open_schedule")]
+                ])
                 await query.message.edit_text(
-                    "⏱️ **إعداد التكرار (الخطوة 1 من 3):**\n\n"
-                    "اكتب الموعد الأول للبدء بالنشر بتنسيق:\n`الساعة:الدقيقة` (مثلاً: `14:30` أو `09:15`)\n\n"
-                    "*(ملاحظة: إذا كنت تريده البدء فوراً اكتب `0`)*"
+                    "⏱️ **إعداد التكرار (الخطوة 1 من 3):**\n\nاختر طريقة تحديد بداية النشر من الأزرار أدناه:",
+                    reply_markup=kb
                 )
+
+        elif data == "rec_start_now":
+            if user_id in temp_posts:
+                temp_posts[user_id]['next_run'] = datetime.now()
+                user_states[user_id] = "rec_step_interval"
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⏱️ 30 دقيقة", callback_data="rec_int_30"), InlineKeyboardButton("🕐 1 ساعة", callback_data="rec_int_60")],
+                    [InlineKeyboardButton("🕒 6 ساعات", callback_data="rec_int_360"), InlineKeyboardButton("12 ساعة", callback_data="rec_int_720")]
+                ])
+                await query.message.edit_text(
+                    "⚡ **تم اختيار البدء فوراً.**\n\n"
+                    "⏱️ **إعداد التكرار (الخطوة 2 من 3):**\nاختر أو اكتب الفارق الزمني بالدقائق بين كل تكرار والآخر:",
+                    reply_markup=kb
+                )
+
+        elif data == "rec_open_schedule":
+            kb = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🕒 وقت البدء الأول", callback_data="rec_set_start_time"),
+                    InlineKeyboardButton("🔄 الوقت بين كل تكرار", callback_data="rec_set_interval_time")
+                ],
+                [InlineKeyboardButton("🔙 رجوع", callback_data="type_recurring")]
+            ])
+            await query.message.edit_text(
+                "⚙️ **خيارات الجدولة:**\n\n"
+                "حدد الإعداد الذي تريد إدخاله:",
+                reply_markup=kb
+            )
+
+        elif data == "rec_set_start_time":
+            user_states[user_id] = "rec_step_time"
+            await query.message.edit_text(
+                "🕒 **تحديد وقت البدء الأول (نظام 24 ساعة):**\n\n"
+                "يرجى إرسال وقت البدء بتنسيق `الساعة:الدقيقة`\n\n"
+                "💡 **أمثلة:**\n"
+                "• `14:30` (الساعة 2:30 ظهراً)\n"
+                "• `21:00` (الساعة 9:00 مساءً)\n"
+                "• `09:15` (الساعة 9:15 صباحاً)"
+            )
+
+        elif data == "rec_set_interval_time":
+            user_states[user_id] = "rec_step_interval"
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("⏱️ 30 دقيقة", callback_data="rec_int_30"), InlineKeyboardButton("🕐 1 ساعة", callback_data="rec_int_60")],
+                [InlineKeyboardButton("🕒 6 ساعات", callback_data="rec_int_360"), InlineKeyboardButton("12 ساعة", callback_data="rec_int_720")]
+            ])
+            await query.message.edit_text(
+                "🔄 **الوقت بين كل تكرار وآخر:**\n\nاختر من القائمة أو اكتب عدد الدقائق يدوياً:",
+                reply_markup=kb
+            )
+        # --- نهاية التعديل الواجهة المطلوبة ---
 
         elif data.startswith("rec_int_"):
             minutes = int(data.split("_")[-1])
@@ -614,7 +668,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
                 rep_str = f"{repeats} مرة" if repeats > 0 else "غير محدود ♾️"
                 await query.message.edit_text(
                     f"✅ **تم جدولة المنشور المكرر بنجاح!**\n\n"
-                    f"📅 بدء النشر: `{next_run.strftime('%Y-%m-%d %I:%M %p')}`\n"
+                    f"📅 بدء النشر: `{next_run.strftime('%Y-%m-%d %H:%M')} (نظام 24h)`\n"
                     f"⏱️ التكرار كل: `{round(interval_sec/60, 1)}` دقيقة\n"
                     f"🔄 الكمية: `{rep_str}`"
                 )
@@ -658,7 +712,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
                     if minutes > 0: time_str.append(f"{minutes} دقيقة")
                 
                     diff_text = " و ".join(time_str) if time_str else "فوراً"
-                    status_timing += f"⏱️ **موعد النشر المتوقع:** بعد `{diff_text}` *(الساعة {est_time.strftime('%I:%M %p')})*"
+                    status_timing += f"⏱️ **موعد النشر المتوقع:** بعد `{diff_text}` *(الساعة {est_time.strftime('%H:%M')})*"
 
                 if media_group_id and media_group_id != "None":
                     await app.copy_media_group(chat_id=query.message.chat.id, from_chat_id=chat_id, message_id=msg_id)
@@ -748,43 +802,47 @@ async def auto_collect_all_types(client: Client, message: Message):
 
     if state == "rec_step_time" and message.text:
         now = datetime.now()
-        if text.strip() == "0":
-            start_time = now
-        else:
-            try:
-                h, m = map(int, text.strip().split(":"))
-                start_time = now.replace(hour=h, minute=m, second=0, microsecond=0)
-                if start_time < now:
-                    start_time += timedelta(days=1)
-            except Exception:
-                await message.reply_text("❌ صيغة الوقت غير صحيحة! يرجى إرسالها مثل `14:30` أو `0` للبدء فوراً.")
-                return
+        try:
+            h, m = map(int, text.strip().split(":"))
+            start_time = now.replace(hour=h, minute=m, second=0, microsecond=0)
+            if start_time < now:
+                start_time += timedelta(days=1)
+        except Exception:
+            await message.reply_text("❌ **صيغة الوقت غير صحيحة!**\nيرجى إرسال التوقيت بنظام 24 ساعة فقط (مثال: `14:30` أو `09:15`).")
+            return
 
-        temp_posts[user_id]['next_run'] = start_time
-        user_states[user_id] = "rec_step_interval"
+        if user_id in temp_posts:
+            temp_posts[user_id]['next_run'] = start_time
+            user_states[user_id] = "rec_step_interval"
 
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⏱️ 30 دقيقة", callback_data="rec_int_30"), InlineKeyboardButton("🕐 1 ساعة", callback_data="rec_int_60")],
-            [InlineKeyboardButton("🕒 6 ساعات", callback_data="rec_int_360"), InlineKeyboardButton("12 ساعة", callback_data="rec_int_720")]
-        ])
-        await message.reply_text("⏱️ **إعداد التكرار (الخطوة 2 من 3):**\n\nاختر أو اكتب الفارق الزمني بالدقائق بين كل منشور:", reply_markup=kb)
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("⏱️ 30 دقيقة", callback_data="rec_int_30"), InlineKeyboardButton("🕐 1 ساعة", callback_data="rec_int_60")],
+                [InlineKeyboardButton("🕒 6 ساعات", callback_data="rec_int_360"), InlineKeyboardButton("12 ساعة", callback_data="rec_int_720")]
+            ])
+            await message.reply_text(
+                f"✅ تم تحديد وقت البدء: `{start_time.strftime('%H:%M')}`\n\n"
+                "⏱️ **إعداد التكرار (الخطوة 2 من 3):**\n"
+                "اختر أو اكتب الفارق الزمني بالدقائق بين كل منشور:", 
+                reply_markup=kb
+            )
         return
 
     if state == "rec_step_interval" and message.text:
         try:
             minutes = int(text.strip())
-            temp_posts[user_id]['interval_sec'] = minutes * 60
-            user_states[user_id] = "rec_step_repeats"
+            if user_id in temp_posts:
+                temp_posts[user_id]['interval_sec'] = minutes * 60
+                user_states[user_id] = "rec_step_repeats"
 
-            kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("5 مرات", callback_data="rec_rep_5"), InlineKeyboardButton("10 مرات", callback_data="rec_rep_10")],
-                [InlineKeyboardButton("♾️ تكرار لا نهائي", callback_data="rec_rep_-1")]
-            ])
-            await message.reply_text(
-                f"🔄 **إعداد التكرار (الخطوة 3 من 3):**\n\n"
-                f"الفارق المحدد: `{minutes}` دقيقة.\n"
-                f"كم عدد مرات تكرار المنشور؟ (اختر أو اكتب الرقم):", reply_markup=kb
-            )
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("5 مرات", callback_data="rec_rep_5"), InlineKeyboardButton("10 مرات", callback_data="rec_rep_10")],
+                    [InlineKeyboardButton("♾️ تكرار لا نهائي", callback_data="rec_rep_-1")]
+                ])
+                await message.reply_text(
+                    f"🔄 **إعداد التكرار (الخطوة 3 من 3):**\n\n"
+                    f"الفارق المحدد: `{minutes}` دقيقة.\n"
+                    f"كم عدد مرات تكرار المنشور؟ (اختر أو اكتب الرقم):", reply_markup=kb
+                )
             return
         except ValueError:
             await message.reply_text("❌ يرجى كتابة أرقام فقط (مثال: 60).")
@@ -812,7 +870,7 @@ async def auto_collect_all_types(client: Client, message: Message):
                 rep_str = f"{repeats} مرة" if repeats > 0 else "غير محدود ♾️"
                 await message.reply_text(
                     f"✅ **تم جدولة المنشور المكرر بنجاح!**\n\n"
-                    f"📅 بدء النشر: `{next_run.strftime('%Y-%m-%d %I:%M %p')}`\n"
+                    f"📅 بدء النشر: `{next_run.strftime('%Y-%m-%d %H:%M')}`\n"
                     f"⏱️ التكرار كل: `{round(interval_sec/60, 1)}` دقيقة\n"
                     f"🔄 الكمية: `{rep_str}`",
                     reply_markup=get_main_reply_keyboard()
@@ -825,7 +883,7 @@ async def auto_collect_all_types(client: Client, message: Message):
             return
 
     # استقبال أي منشور جديد من الآدمن
-    if not state and not message.text in BUTTON_TEXTS:
+    if not state and message.text not in BUTTON_TEXTS:
         temp_posts[user_id] = {
             'chat_id': message.chat.id,
             'msg_id': message.id,
@@ -838,8 +896,6 @@ async def auto_collect_all_types(client: Client, message: Message):
         ])
 
         await message.reply_text("📥 **تم استلام المنشور!**\nاختر كيف تريد نشر هذا المنشور:", reply_markup=kb)
-
-# ==================== 8. نقطة التشغيل الرئيسية (Main) ====================
 
 # ==================== 8. نقطة التشغيل الرئيسية (Main) ====================
 
