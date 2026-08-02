@@ -43,7 +43,7 @@ threading.Thread(target=run_web, daemon=True).start()
 # ==================== 1. الإعدادات والبيانات ====================
 API_ID = 32087655
 API_HASH = "0276a0250c2cfc8a1dde70b0f9f92fcd"
-BOT_TOKEN = "8811469771:AAEKzVe-JlqDIRueqiMPcbEkUPQAesx6Bmw"
+BOT_TOKEN = "8811469771:AAFYUx7hBFRCzD5cX6HsN0lGW71ZFnzDwP8"
 OWNER_ID = 2071492262
 
 # التحكم في النشر
