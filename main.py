@@ -460,6 +460,14 @@ async def callback_handler(client: Client, query: CallbackQuery):
             user_states[user_id] = None
             await query.message.delete()
 
+        elif data.startswith("rec_help_"):
+            if data == "rec_help_start":
+                await query.answer("⏰ ساعة البدء: تحديد وقت بداية النشر (مثال: 16:00)", show_alert=True)
+            elif data == "rec_help_interval":
+                await query.answer("⏱️ مدة التكرار: الفارق بين كل نشر بالدقائق (مثال: 60)", show_alert=True)
+            elif data == "rec_help_stop":
+                await query.answer("🛑 عدد التكرار: كم مرة يتكرر النشر (ضع 0 للتكرار المستمر)", show_alert=True)
+
         elif data == "add_channel":
             user_states[user_id] = "waiting_add_channel"
             await query.message.edit_text("📢 **أرسل معرّف القناة الآن:**\n*(مثال: `@mychannel`)*")
@@ -519,14 +527,26 @@ async def callback_handler(client: Client, query: CallbackQuery):
 
         elif data == "type_recurring":
             user_states[user_id] = "waiting_recurring_info"
+            kb = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("⏰ ساعة البدء", callback_data="rec_help_start"),
+                    InlineKeyboardButton("⏱️ مدة التكرار", callback_data="rec_help_interval")
+                ],
+                [
+                    InlineKeyboardButton("🛑 عدد التكرار", callback_data="rec_help_stop")
+                ],
+                [
+                    InlineKeyboardButton("🔙 رجوع", callback_data="action_cancel"),
+                    InlineKeyboardButton("❌ إلغاء", callback_data="action_cancel")
+                ]
+            ])
             await query.message.edit_text(
-                "🔄 **ضبط إعدادات التكرار:**\n"
-                "───────────────────\n"
-                "أرسل البيانات بالصيغة التالية:\n"
+                "✨ **ضبط إعدادات التكرار التلقائي** ✨\n\n"
+                "📌 **الصيغة المطلوبة:**\n"
                 "`ساعة:دقيقة دقائق_التكرار عدد_المرات`\n\n"
-                "📌 **مثال:** `16:00 60 5`\n"
-                "*(سيبدأ اليوم الساعة 04:00 مساءً، ويكرر كل 60 دقيقة لخمس مرات)*\n"
-                "*(ضع `0` في عدد المرات للتكرار المستمر بلا نهاية)*"
+                "💡 **مثال:** `16:00 60 5`\n"
+                "*(البدء 04:00 مساءً | تكرار كل 60 دقيقة | 5 مرات)*",
+                reply_markup=kb
             )
 
         elif data == "confirm_clear_queue":
@@ -588,7 +608,7 @@ async def process_inputs(client: Client, message: Message):
                 user_states[user_id] = None
                 del temp_posts[user_id]
                 await message.reply_text(
-                    f"✅ **تم جدول المنشور المكرر بنجاح!**\n───────────────────\n"
+                    f"✅ **تم جدولة المنشور المكرر بنجاح!**\n───────────────────\n"
                     f"⏰ **النشر الأول:** `{start_dt.strftime('%Y-%m-%d %H:%M')}`\n"
                     f"⏱️ **التكرار:** كل `{interval_min}` دقيقة\n"
                     f"🔁 **المرات:** `{'بلا نهاية' if repeats_val == -1 else repeats_val}`",
