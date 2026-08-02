@@ -394,7 +394,8 @@ async def handle_reply_buttons(client: Client, message: Message):
 
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("➕ إضافة قناة جديدة", callback_data="add_channel")],
-            [InlineKeyboardButton("❌ حذف قناة", callback_data="remove_channel_menu")]
+            [InlineKeyboardButton("❌ حذف قناة", callback_data="remove_channel_menu")],
+            [InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]
         ])
         await message.reply_text(ch_text, reply_markup=kb)
 
@@ -410,7 +411,8 @@ async def handle_reply_buttons(client: Client, message: Message):
                 InlineKeyboardButton("🕔 5 ساعات", callback_data="set_time_300"),
                 InlineKeyboardButton("🕕 12 ساعة", callback_data="set_time_720")
             ],
-            [InlineKeyboardButton("✏️ إدخال عدد الدقائق يدوياً", callback_data="set_custom_time")]
+            [InlineKeyboardButton("✏️ إدخال عدد الدقائق يدوياً", callback_data="set_custom_time")],
+            [InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]
         ])
         await message.reply_text(
             f"⏱️ **اختر الفارق الزمني المطلوبة:**\n*(الحالي: `{round(POST_INTERVAL/60, 1)}` دقيقة)*", 
@@ -421,7 +423,8 @@ async def handle_reply_buttons(client: Client, message: Message):
         footer_status = f"`{custom_footer}`" if custom_footer else "❌ *غير مفعّل*"
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("✏️ تعديل الحقوق", callback_data="set_footer")],
-            [InlineKeyboardButton("🗑️ إزالة الحقوق", callback_data="clear_footer")]
+            [InlineKeyboardButton("🗑️ إزالة الحقوق", callback_data="clear_footer")],
+            [InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]
         ])
         await message.reply_text(
             f"🎨 **التوقيع/الحقوق الحالية أسفل الرسائل:**\n{footer_status}",
@@ -445,7 +448,8 @@ async def handle_reply_buttons(client: Client, message: Message):
             if row:
                 buttons.append(row)
 
-        reply_kb = InlineKeyboardMarkup(buttons) if buttons else None
+        buttons.append([InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")])
+        reply_kb = InlineKeyboardMarkup(buttons)
 
         msg_text = (
             f"📊 **تفاصيل وحالة النظام:**\n\n"
@@ -475,6 +479,7 @@ async def handle_reply_buttons(client: Client, message: Message):
             msg_text += f"{idx}. ⏱️ النشر القادم: `{dt_str}`\n   🔄 التكرار كل: `{interval_min}` دقيقة | المتبقي: `{rep_str}`\n\n"
             buttons.append([InlineKeyboardButton(f"🗑️ حذف المنشور المكرر رقم {idx}", callback_data=f"del_rec_{r_id}")])
 
+        buttons.append([InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")])
         await message.reply_text(msg_text, reply_markup=InlineKeyboardMarkup(buttons))
 
     elif text == "🗑️ إفراغ الطابور بالكامل":
@@ -484,7 +489,7 @@ async def handle_reply_buttons(client: Client, message: Message):
             return
         confirm_kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ نعم، إفراغ الطابور", callback_data="confirm_clear_queue")],
-            [InlineKeyboardButton("❌ إلغاء", callback_data="cancel_clear_queue")]
+            [InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]
         ])
         await message.reply_text(
             f"⚠️ **هل أنت متأكد من حذف جميع المنشورات ({queue_len}) من الطابور؟**\nهذا الإجراء لا يمكن التراجع عنه.",
@@ -504,7 +509,7 @@ async def handle_reply_buttons(client: Client, message: Message):
             total_success += success
             total_fail += fail
         msg_text += f"\n📊 **الإجمالي:** ✅ `{total_success}` | ❌ `{total_fail}`"
-        await message.reply_text(msg_text)
+        await message.reply_text(msg_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]]))
 
 # ==================== 6. التحكم بالأزرار التفاعلية ====================
 
@@ -517,15 +522,43 @@ async def callback_handler(client: Client, query: CallbackQuery):
     try:
         target_channels = get_channels()
 
-        if data == "add_channel":
+        if data == "action_cancel":
+            user_states[user_id] = None
+            if user_id in temp_posts:
+                del temp_posts[user_id]
+            await query.answer("تم الإلغاء!", show_alert=False)
+            await query.message.edit_text("❌ **تم إلغاء العملية والعودة للقائمة الرئيسية.**")
+
+        elif data == "add_channel":
             user_states[user_id] = "waiting_add_channel"
-            await query.message.edit_text("✏️ **أرسل الآن معرف القناة أو رابطها** (مثال: `@my_channel`).")
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔵 رجوع", callback_data="manage_channels_menu")],
+                [InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]
+            ])
+            await query.message.edit_text("✏️ **أرسل الآن معرف القناة أو رابطها** (مثال: `@my_channel`).", reply_markup=kb)
+
+        elif data == "manage_channels_menu":
+            user_states[user_id] = None
+            ch_text = "📢 **القنوات المسجلة للنشر:**\n\n"
+            if target_channels:
+                for i, c in enumerate(target_channels, 1):
+                    ch_text += f"{i}. 📌 `{c}`\n"
+            else:
+                ch_text += "⚠️ لا توجد أي قنوات مضافة حتى الآن!\n"
+
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("➕ إضافة قناة جديدة", callback_data="add_channel")],
+                [InlineKeyboardButton("❌ حذف قناة", callback_data="remove_channel_menu")],
+                [InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]
+            ])
+            await query.message.edit_text(ch_text, reply_markup=kb)
 
         elif data == "remove_channel_menu":
             if not target_channels:
                 await query.answer("لا توجد قنوات لحذفها!", show_alert=True)
                 return
             buttons = [[InlineKeyboardButton(f"❌ {c}", callback_data=f"del_ch_{c}")] for c in target_channels]
+            buttons.append([InlineKeyboardButton("🔵 رجوع", callback_data="manage_channels_menu"), InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")])
             await query.message.edit_text("🗑️ **اختر القناة المراد حذفها:**", reply_markup=InlineKeyboardMarkup(buttons))
 
         elif data.startswith("del_ch_"):
@@ -543,11 +576,17 @@ async def callback_handler(client: Client, query: CallbackQuery):
 
         elif data == "set_custom_time":
             user_states[user_id] = "waiting_custom_time"
-            await query.message.edit_text("✏️ **اكتب الفارق الزمني بالدقائق:** (مثال: `120`).")
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]
+            ])
+            await query.message.edit_text("✏️ **اكتب الفارق الزمني بالدقائق:** (مثال: `120`).", reply_markup=kb)
 
         elif data == "set_footer":
             user_states[user_id] = "waiting_footer"
-            await query.message.edit_text("🎨 **أرسل التوقيع/النص الذي تريد ظهوره تلقائياً في الأسفل:**")
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]
+            ])
+            await query.message.edit_text("🎨 **أرسل التوقيع/النص الذي تريد ظهوره تلقائياً في الأسفل:**", reply_markup=kb)
 
         elif data == "clear_footer":
             custom_footer = ""
@@ -573,7 +612,8 @@ async def callback_handler(client: Client, query: CallbackQuery):
             else:
                 kb = InlineKeyboardMarkup([
                     [InlineKeyboardButton("🟢 نشر الآن", callback_data="rec_start_now")],
-                    [InlineKeyboardButton("⏰ جدولة وتحديد وقت", callback_data="rec_open_schedule")]
+                    [InlineKeyboardButton("⏰ جدولة وتحديد وقت", callback_data="rec_open_schedule")],
+                    [InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]
                 ])
                 await query.message.edit_text(
                     "⏱️ **إعداد التكرار (الخطوة 1 من 3):**\n\nاختر طريقة تحديد بداية النشر من الأزرار أدناه:",
@@ -586,7 +626,8 @@ async def callback_handler(client: Client, query: CallbackQuery):
                 kb = InlineKeyboardMarkup([
                     [InlineKeyboardButton("⏱️ 30 دقيقة", callback_data="rec_int_30"), InlineKeyboardButton("🕐 1 ساعة", callback_data="rec_int_60")],
                     [InlineKeyboardButton("🕒 6 ساعات", callback_data="rec_int_360"), InlineKeyboardButton("12 ساعة", callback_data="rec_int_720")],
-                    [InlineKeyboardButton("✏️ إدخال عدد الدقائق يدوياً", callback_data="rec_custom_interval")]
+                    [InlineKeyboardButton("✏️ إدخال عدد الدقائق يدوياً", callback_data="rec_custom_interval")],
+                    [InlineKeyboardButton("🔵 رجوع", callback_data="type_recurring"), InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]
                 ])
                 await query.message.edit_text(
                     "⚡ **تم اختيار البدء فوراً.**\n\n"
@@ -600,7 +641,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
                     InlineKeyboardButton("🕒 وقت البدء الأول", callback_data="rec_set_start_time"),
                     InlineKeyboardButton("🔄 الوقت بين كل تكرار", callback_data="rec_set_interval_time")
                 ],
-                [InlineKeyboardButton("🔙 رجوع", callback_data="type_recurring")]
+                [InlineKeyboardButton("🔵 رجوع", callback_data="type_recurring"), InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]
             ])
             await query.message.edit_text(
                 "⚙️ **خيارات الجدولة:**\n\n"
@@ -610,20 +651,25 @@ async def callback_handler(client: Client, query: CallbackQuery):
 
         elif data == "rec_set_start_time":
             user_states[user_id] = "rec_step_time"
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔵 رجوع", callback_data="rec_open_schedule"), InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]
+            ])
             await query.message.edit_text(
                 "🕒 **تحديد وقت البدء الأول (نظام 24 ساعة):**\n\n"
                 "يرجى إرسال وقت البدء بتنسيق `الساعة:الدقيقة`\n\n"
                 "💡 **أمثلة:**\n"
                 "• `14:30` (الساعة 2:30 ظهراً)\n"
                 "• `21:00` (الساعة 9:00 مساءً)\n"
-                "• `09:15` (الساعة 9:15 صباحاً)"
+                "• `09:15` (الساعة 9:15 صباحاً)",
+                reply_markup=kb
             )
 
         elif data == "rec_set_interval_time":
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("⏱️ 30 دقيقة", callback_data="rec_int_30"), InlineKeyboardButton("🕐 1 ساعة", callback_data="rec_int_60")],
                 [InlineKeyboardButton("🕒 6 ساعات", callback_data="rec_int_360"), InlineKeyboardButton("12 ساعة", callback_data="rec_int_720")],
-                [InlineKeyboardButton("✏️ إدخال عدد الدقائق يدوياً من عندك", callback_data="rec_custom_interval")]
+                [InlineKeyboardButton("✏️ إدخال عدد الدقائق يدوياً من عندك", callback_data="rec_custom_interval")],
+                [InlineKeyboardButton("🔵 رجوع", callback_data="rec_open_schedule"), InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]
             ])
             await query.message.edit_text(
                 "🔄 **الوقت بين كل تكرار وآخر:**\n\nاختر من القائمة أو اضغط زر الإدخال اليدوي لتحديد وقتك الخاص:",
@@ -632,12 +678,16 @@ async def callback_handler(client: Client, query: CallbackQuery):
 
         elif data == "rec_custom_interval":
             user_states[user_id] = "rec_step_interval"
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔵 رجوع", callback_data="rec_set_interval_time"), InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]
+            ])
             await query.message.edit_text(
                 "✏️ **أرسل الآن الفارق الزمني بالدقائق من عندك:**\n\n"
                 "💡 **أمثلة:**\n"
                 "• أرسل `15` لتكرار كل 15 دقيقة\n"
                 "• أرسل `45` لتكرار كل 45 دقيقة\n"
-                "• أرسل `90` لتكرار كل ساعة ونصف"
+                "• أرسل `90` لتكرار كل ساعة ونصف",
+                reply_markup=kb
             )
 
         elif data.startswith("rec_int_"):
@@ -648,7 +698,8 @@ async def callback_handler(client: Client, query: CallbackQuery):
             
                 kb = InlineKeyboardMarkup([
                     [InlineKeyboardButton("5 مرات", callback_data="rec_rep_5"), InlineKeyboardButton("10 مرات", callback_data="rec_rep_10")],
-                    [InlineKeyboardButton("♾️ تكرار لا نهائي", callback_data="rec_rep_-1")]
+                    [InlineKeyboardButton("♾️ تكرار لا نهائي", callback_data="rec_rep_-1")],
+                    [InlineKeyboardButton("🔵 رجوع", callback_data="rec_set_interval_time"), InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]
                 ])
                 await query.message.edit_text(
                     f"🔄 **إعداد التكرار (الخطوة 3 من 3):**\n\n"
@@ -730,7 +781,8 @@ async def callback_handler(client: Client, query: CallbackQuery):
                 action_keyboard = InlineKeyboardMarkup([
                     [InlineKeyboardButton("⚡ نشر هذا المنشور الآن فوراً", callback_data=f"publish_now_{q_id}")],
                     [InlineKeyboardButton("⏭️ تأجيله إلى نهاية الطابور", callback_data=f"skip_next_{q_id}")],
-                    [InlineKeyboardButton(f"🗑️ حذف المنشور رقم {post_idx}", callback_data=f"delete_single_post_{q_id}")]
+                    [InlineKeyboardButton(f"🗑️ حذف المنشور رقم {post_idx}", callback_data=f"delete_single_post_{q_id}")],
+                    [InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]
                 ])
 
                 info_text = f"📌 **تفاصيل المنشور رقم `{post_idx}`:**\n\n{status_timing}"
@@ -760,10 +812,6 @@ async def callback_handler(client: Client, query: CallbackQuery):
             last_post_time = None
             await query.answer("🗑️ تم إفراغ الطابور!", show_alert=True)
             await query.message.edit_text("🗑️ **تم مسح جميع المنشورات من الطابور بنجاح.**")
-
-        elif data == "cancel_clear_queue":
-            await query.answer("تم الإلغاء", show_alert=False)
-            await query.message.edit_text("✅ **تم إلغاء عملية الإفراغ، الطابور كما هو.**")
 
         elif data.startswith("skip_next_"):
             q_id = int(data.replace("skip_next_", ""))
@@ -825,7 +873,8 @@ async def auto_collect_all_types(client: Client, message: Message):
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("⏱️ 30 دقيقة", callback_data="rec_int_30"), InlineKeyboardButton("🕐 1 ساعة", callback_data="rec_int_60")],
                 [InlineKeyboardButton("🕒 6 ساعات", callback_data="rec_int_360"), InlineKeyboardButton("12 ساعة", callback_data="rec_int_720")],
-                [InlineKeyboardButton("✏️ إدخال عدد الدقائق يدوياً من عندك", callback_data="rec_custom_interval")]
+                [InlineKeyboardButton("✏️ إدخال عدد الدقائق يدوياً من عندك", callback_data="rec_custom_interval")],
+                [InlineKeyboardButton("🔵 رجوع", callback_data="rec_open_schedule"), InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]
             ])
             await message.reply_text(
                 f"✅ تم تحديد وقت البدء: `{start_time.strftime('%H:%M')}`\n\n"
@@ -845,7 +894,8 @@ async def auto_collect_all_types(client: Client, message: Message):
 
                 kb = InlineKeyboardMarkup([
                     [InlineKeyboardButton("5 مرات", callback_data="rec_rep_5"), InlineKeyboardButton("10 مرات", callback_data="rec_rep_10")],
-                    [InlineKeyboardButton("♾️ تكرار لا نهائي", callback_data="rec_rep_-1")]
+                    [InlineKeyboardButton("♾️ تكرار لا نهائي", callback_data="rec_rep_-1")],
+                    [InlineKeyboardButton("🔵 رجوع", callback_data="rec_set_interval_time"), InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]
                 ])
                 await message.reply_text(
                     f"🔄 **إعداد التكرار (الخطوة 3 من 3):**\n\n"
@@ -901,7 +951,8 @@ async def auto_collect_all_types(client: Client, message: Message):
 
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🟢 منشور عادي (جدولة)", callback_data="type_normal")],
-            [InlineKeyboardButton("🔄 منشور مكرر", callback_data="type_recurring")]
+            [InlineKeyboardButton("🔄 منشور مكرر", callback_data="type_recurring")],
+            [InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]
         ])
 
         await message.reply_text("📥 **تم استلام المنشور!**\nاختر كيف تريد نشر هذا المنشور:", reply_markup=kb)
