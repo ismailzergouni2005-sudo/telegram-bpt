@@ -19,7 +19,7 @@ import threading
 from flask import Flask
 import nest_asyncio
 
-# إنشاء Event Loop رئيسي لتفادي مشاكل Asyncio
+# إنشاء Event Loop رئيسي
 try:
     asyncio.get_event_loop()
 except RuntimeError:
@@ -187,6 +187,19 @@ def add_to_queue_db(chat_id, message_id, media_group_id, channels_list):
     conn.commit()
     conn.close()
 
+def add_recurring_db(chat_id, message_id, media_group_id, channels_list, next_run_dt, interval_sec, repeats):
+    conn = sqlite3.connect("bot_data.db")
+    cursor = conn.cursor()
+    chs_str = ",".join(channels_list)
+    ts = next_run_dt.timestamp()
+    cursor.execute("""
+        INSERT INTO recurring_posts 
+        (chat_id, message_id, media_group_id, channels, next_run_timestamp, repeat_interval_seconds, remaining_repeats)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (chat_id, message_id, str(media_group_id), chs_str, ts, interval_sec, repeats))
+    conn.commit()
+    conn.close()
+
 def get_queue_db():
     conn = sqlite3.connect("bot_data.db")
     cursor = conn.cursor()
@@ -195,10 +208,35 @@ def get_queue_db():
     conn.close()
     return rows
 
+def get_recurring_db():
+    conn = sqlite3.connect("bot_data.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, chat_id, message_id, media_group_id, channels, next_run_timestamp, repeat_interval_seconds, remaining_repeats FROM recurring_posts ORDER BY next_run_timestamp ASC")
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
 def pop_queue_db(queue_id):
     conn = sqlite3.connect("bot_data.db")
     cursor = conn.cursor()
     cursor.execute("DELETE FROM queue WHERE id = ?", (queue_id,))
+    conn.commit()
+    conn.close()
+
+def delete_recurring_db(rec_id):
+    conn = sqlite3.connect("bot_data.db")
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM recurring_posts WHERE id = ?", (rec_id,))
+    conn.commit()
+    conn.close()
+
+def update_recurring_next_run(rec_id, next_ts, remaining):
+    conn = sqlite3.connect("bot_data.db")
+    cursor = conn.cursor()
+    if remaining == 0:
+        cursor.execute("DELETE FROM recurring_posts WHERE id = ?", (rec_id,))
+    else:
+        cursor.execute("UPDATE recurring_posts SET next_run_timestamp = ?, remaining_repeats = ? WHERE id = ?", (next_ts, remaining, rec_id))
     conn.commit()
     conn.close()
 
@@ -334,7 +372,19 @@ async def publish_worker():
             now_ts = now.timestamp()
             target_channels = get_channels()
 
-            # 1. معالجة طوابير الملفات المجدولة بـ (ساعة البدء والتكرار)
+            # 1. المنشورات المكررة
+            recurring_items = get_recurring_db()
+            for r in recurring_items:
+                r_id, chat_id, msg_id, media_group_id, chs_str, next_run_ts, interval_sec, remaining = r
+                if now_ts >= next_run_ts:
+                    channels = chs_str.split(",")
+                    await publish_item(chat_id, msg_id, media_group_id, channels)
+                    
+                    new_remaining = remaining - 1 if remaining > 0 else -1
+                    next_ts = now_ts + interval_sec
+                    update_recurring_next_run(r_id, next_ts, new_remaining)
+
+            # 2. طوابير الملفات المجدولة
             files = get_uploaded_files()
             for fid, fname, fcount, fpath, start_ts, interval_sec in files:
                 if start_ts > 0 and now_ts >= start_ts and fcount > 0:
@@ -346,14 +396,13 @@ async def publish_worker():
                         
                         delete_file_queue_item(item_id, fid)
                         
-                        # تحديث موعد الصورة القادمة في طابور الملف
                         if len(fqueue) - 1 > 0:
                             next_ts = now_ts + (interval_sec if interval_sec > 0 else 60)
                             update_file_schedule(fid, next_ts, interval_sec)
                         else:
                             update_file_schedule(fid, 0, 0)
 
-            # 2. معالجة الطابور الرئيسي
+            # 3. الطابور الرئيسي
             if not is_paused:
                 queue_items = get_queue_db()
                 if queue_items:
@@ -376,18 +425,14 @@ async def publish_worker():
             
         await asyncio.sleep(3)
 
-# ==================== 5. الأوامر الرئيسية والتفاعل ====================
+# ==================== 5. استقبال الأوامر والأزرار الرئيسية ====================
 
 admin_filter = filters.private & filters.user(OWNER_ID)
 
 @app.on_message(filters.command("start") & admin_filter)
 async def start_cmd(client: Client, message: Message):
     await message.reply_text(
-        "💎 **أهلاً بك في نظام النشر المطور مع الجدولة والمعاينة!**\n\n"
-        "✨ **الميزات:**\n"
-        "▫️ جدولة طوابير الملفات وتحديد (ساعة البدء والفرز الزمني).\n"
-        "▫️ عرض المعاينة للصور والمنشورات مباشرة داخل البوت.\n"
-        "▫️ تعديل الكابشن/النص المرفق للمنشورات بسهولة.\n\n"
+        "💎 **أهلاً بك في نظام النشر المطور!**\n\n"
         "👇 **اختر من اللوحة أدناه للبدء:**",
         reply_markup=get_main_reply_keyboard()
     )
@@ -398,11 +443,77 @@ async def handle_reply_buttons(client: Client, message: Message):
     user_id = message.from_user.id
     text = message.text.strip()
 
+    # 1. بدء / إيقاف النشر
     if text in ["⏸️ إيقاف النشر مؤقتاً", "▶️ بدء / استئناف النشر"]:
         is_paused = not is_paused
-        status_msg = "🔴 **تم إيقاف النشر مؤقتاً.**" if is_paused else f"🟢 **تم تشغيل النشر بنجاح!**"
+        status_msg = "🔴 **تم إيقاف النشر مؤقتاً.**" if is_paused else f"🟢 **تم تشغيل النشر بنجاح!**\nسيتم النشر بفارق `{round(POST_INTERVAL/60, 1)}` دقيقة."
         await message.reply_text(status_msg, reply_markup=get_main_reply_keyboard())
 
+    # 2. تغيير الفارق الزمني
+    elif text == "⏱️ تغيير الفارق الزمني":
+        time_inline_keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚡ 5 دقائق", callback_data="set_time_5"), InlineKeyboardButton("⏱️ 30 دقيقة", callback_data="set_time_30"), InlineKeyboardButton("🕐 1 ساعة", callback_data="set_time_60")],
+            [InlineKeyboardButton("🕒 3 ساعات", callback_data="set_time_180"), InlineKeyboardButton("🕔 5 ساعات", callback_data="set_time_300"), InlineKeyboardButton("🕕 12 ساعة", callback_data="set_time_720")],
+            [InlineKeyboardButton("✏️ إدخال عدد الدقائق يدوياً", callback_data="set_custom_time")],
+            [InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]
+        ])
+        await message.reply_text(f"⏱️ **اختر الفارق الزمني:**\n*(الحالي: `{round(POST_INTERVAL/60, 1)}` دقيقة)*", reply_markup=time_inline_keyboard)
+
+    # 3. إدارة القنوات
+    elif text == "📢 إدارة القنوات":
+        target_channels = get_channels()
+        ch_text = "📢 **القنوات المسجلة للنشر:**\n\n"
+        if target_channels:
+            for i, c in enumerate(target_channels, 1):
+                ch_text += f"{i}. 📌 `{c}`\n"
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("➕ إضافة قناة جديدة", callback_data="add_channel")],
+                [InlineKeyboardButton("❌ حذف قناة", callback_data="remove_channel_menu")],
+                [InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]
+            ])
+        else:
+            ch_text += "⚠️ لا توجد قنوات!"
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("➕ إضافة قناة جديدة", callback_data="add_channel")], [InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]])
+
+        await message.reply_text(ch_text, reply_markup=kb)
+
+    # 4. حالة النشر والطابور
+    elif text == "📊 حالة النشر والطابور":
+        queue = get_queue_db()
+        queue_len = len(queue)
+        msg_text = f"📊 **الطابور الرئيسي الحالي:** `{queue_len}` منشورات\n\n"
+        buttons = []
+        
+        for idx, item in enumerate(queue, 1):
+            q_id = item[0]
+            buttons.append([
+                InlineKeyboardButton(f"👁️ معاينة منشور #{idx}", callback_data=f"preview_main_q_{q_id}"),
+                InlineKeyboardButton(f"❌ حذف #{idx}", callback_data=f"delete_main_q_{q_id}")
+            ])
+
+        buttons.append([InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")])
+        await message.reply_text(msg_text, reply_markup=InlineKeyboardMarkup(buttons))
+
+    # 5. المنشورات المكررة
+    elif text == "🔄 المنشورات المكررة":
+        recs = get_recurring_db()
+        if not recs:
+            await message.reply_text("🔄 **لا توجد منشورات مكررة حالياً.**")
+            return
+        
+        msg_text = "🔄 **قائمة المنشورات المكررة:**\n\n"
+        buttons = []
+        for r in recs:
+            r_id, _, _, _, chs_str, next_run_ts, interval_sec, remaining = r
+            dt_str = datetime.fromtimestamp(next_run_ts).strftime('%Y-%m-%d %H:%M')
+            rem_str = "غير محدود" if remaining == -1 else f"{remaining} مرة"
+            msg_text += f"📌 **معرف:** `{r_id}`\n⏱️ **القادمة:** `{dt_str}`\n🔄 **التكرار:** كل `{round(interval_sec/60, 1)}` دقيقة\n🔢 **المتبقي:** `{rem_str}`\n\n"
+            buttons.append([InlineKeyboardButton(f"❌ حذف المنشور المكرر #{r_id}", callback_data=f"delete_rec_{r_id}")])
+
+        buttons.append([InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")])
+        await message.reply_text(msg_text, reply_markup=InlineKeyboardMarkup(buttons))
+
+    # 6. إدارة الملفات المرفوعة
     elif text == "📁 إدارة الملفات المرفوعة":
         files = get_uploaded_files()
         if not files:
@@ -419,23 +530,40 @@ async def handle_reply_buttons(client: Client, message: Message):
         buttons.append([InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")])
         await message.reply_text(msg_text, reply_markup=InlineKeyboardMarkup(buttons))
 
-    elif text == "📊 حالة النشر والطابور":
-        queue = get_queue_db()
-        queue_len = len(queue)
-        msg_text = f"📊 **الطابور الرئيسي الحالي:** `{queue_len}` منشورات\n\n"
-        buttons = []
-        
-        for idx, item in enumerate(queue, 1):
-            q_id = item[0]
-            buttons.append([
-                InlineKeyboardButton(f"👁️ معاينة منشور #{idx}", callback_data=f"preview_main_q_{q_id}"),
-                InlineKeyboardButton(f"❌ حذف", callback_data=f"delete_main_q_{q_id}")
-            ])
+    # 7. إعداد الحقوق والتوقيع
+    elif text == "🎨 إعداد الحقوق والتوقيع":
+        footer_status = f"`{custom_footer}`" if custom_footer else "❌ *غير مفعّل*"
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✏️ تعديل الحقوق", callback_data="set_footer")],
+            [InlineKeyboardButton("🗑️ إزالة الحقوق", callback_data="clear_footer")],
+            [InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]
+        ])
+        await message.reply_text(f"🎨 **التوقيع الحالي:**\n{footer_status}", reply_markup=kb)
 
-        buttons.append([InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")])
-        await message.reply_text(msg_text, reply_markup=InlineKeyboardMarkup(buttons))
+    # 8. إفراغ الطابور بالكامل
+    elif text == "🗑️ إفراغ الطابور بالكامل":
+        queue_len = len(get_queue_db())
+        if queue_len == 0:
+            await message.reply_text("⚠️ **الطابور فارغ بالفعل.**")
+            return
+        confirm_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ نعم، إفراغ الطابور", callback_data="confirm_clear_queue")],
+            [InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]
+        ])
+        await message.reply_text(f"⚠️ **هل أنت متأكد من مسح جميع المنشورات ({queue_len}) من الطابور الرئيسي؟**", reply_markup=confirm_kb)
 
-# ==================== 6. التحكم والزر المعاينة والجدولة ====================
+    # 9. إحصائيات النشر
+    elif text == "📈 إحصائيات النشر":
+        stats = get_stats()
+        if not stats:
+            await message.reply_text("📈 **لا توجد إحصائيات بعد.**")
+            return
+        msg_text = "📈 **إحصائيات النشر:**\n\n"
+        for ch, success, fail in stats:
+            msg_text += f"📌 `{ch}` → ✅ `{success}` | ❌ `{fail}`\n"
+        await message.reply_text(msg_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]]))
+
+# ==================== 6. التحكم بالأزرار التفاعلية ====================
 
 @app.on_callback_query()
 async def callback_handler(client: Client, query: CallbackQuery):
@@ -444,9 +572,51 @@ async def callback_handler(client: Client, query: CallbackQuery):
     user_id = query.from_user.id
 
     try:
+        target_channels = get_channels()
+
         if data == "action_cancel":
             user_states[user_id] = None
             await query.message.edit_text("❌ **تم إلغاء العملية.**")
+
+        elif data == "add_channel":
+            user_states[user_id] = "waiting_add_channel"
+            await query.message.edit_text("📢 **أرسل معرف القناة أو رابطها الآن:**\n*(مثال: `@mychannel`)*")
+
+        elif data == "remove_channel_menu":
+            buttons = []
+            for ch in target_channels:
+                buttons.append([InlineKeyboardButton(f"❌ {ch}", callback_data=f"remove_ch_{ch}")])
+            buttons.append([InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")])
+            await query.message.edit_text("❌ **اختر القناة التي تريد إزالتها:**", reply_markup=InlineKeyboardMarkup(buttons))
+
+        elif data.startswith("remove_ch_"):
+            ch_to_rem = data.replace("remove_ch_", "")
+            remove_channel_db(ch_to_rem)
+            await query.answer("تم حذف القناة!", show_alert=True)
+            await query.message.edit_text(f"✅ **تم حذف القناة `{ch_to_rem}` بنجاح.**")
+
+        elif data.startswith("set_time_"):
+            val = data.replace("set_time_", "")
+            if val == "custom":
+                user_states[user_id] = "waiting_custom_time"
+                await query.message.edit_text("⏱️ **أرسل عدد الدقائق المطلوبة (أرقام فقط):**")
+            else:
+                POST_INTERVAL = int(val) * 60
+                await query.message.edit_text(f"✅ **تم ضبط الفارق الزمني على `{val}` دقيقة.**")
+
+        elif data == "set_footer":
+            user_states[user_id] = "waiting_footer"
+            await query.message.edit_text("✏️ **أرسل التوقيع/الحقوق التي تريد إضافتها أسفل المنشورات:**")
+
+        elif data == "clear_footer":
+            custom_footer = ""
+            await query.message.edit_text("🗑️ **تم إزالة التوقيع بنجاح.**")
+
+        elif data.startswith("delete_rec_"):
+            r_id = int(data.replace("delete_rec_", ""))
+            delete_recurring_db(r_id)
+            await query.answer("تم حذف المنشور المكرر!", show_alert=True)
+            await query.message.edit_text("🗑️ **تم حذف المنشور المكرر بنجاح.**")
 
         elif data.startswith("manage_file_"):
             fid = int(data.replace("manage_file_", ""))
@@ -516,7 +686,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
 
             if row and os.path.exists(row[0]):
                 await app.send_photo(chat_id=user_id, photo=row[0], caption=f"👁️ **معاينة الصورة:**\n\n{row[1]}")
-                await query.answer("تم عرض الصورة بنجاح!")
+                await query.answer("تم عرض الصورة!")
 
         elif data.startswith("edit_cap_"):
             parts = data.split("_")
@@ -533,6 +703,23 @@ async def callback_handler(client: Client, query: CallbackQuery):
             await query.answer("تم حذف الصورة من الطابور!", show_alert=True)
             await query.message.edit_text("✅ **تم تحديث الطابور.**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📋 عرض الطابور", callback_data=f"view_fq_{fid}")]]))
 
+        elif data.startswith("enqueue_file_"):
+            fid = int(data.replace("enqueue_file_", ""))
+            fqueue = get_file_queue(fid)
+            if fqueue:
+                for _, photo_path, _, _ in fqueue:
+                    if os.path.exists(photo_path):
+                        sent_msg = await app.send_photo(chat_id=user_id, photo=photo_path)
+                        add_to_queue_db(sent_msg.chat.id, sent_msg.id, None, target_channels)
+                await query.answer("تم إدراج كامل طابور الملف بالنشر!", show_alert=True)
+                await query.message.edit_text("✅ **تم نقل المنشورات للطابور الرئيسي.**")
+
+        elif data.startswith("delete_file_"):
+            fid = int(data.replace("delete_file_", ""))
+            delete_uploaded_file_db(fid)
+            await query.answer("تم حذف الملف!", show_alert=True)
+            await query.message.edit_text("🗑️ **تم حذف الملف وطابوره نهائياً.**")
+
         elif data.startswith("preview_main_q_"):
             q_id = int(data.replace("preview_main_q_", ""))
             conn = sqlite3.connect("bot_data.db")
@@ -543,7 +730,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
 
             if row:
                 await app.copy_message(chat_id=user_id, from_chat_id=row[0], message_id=row[1])
-                await query.answer("تم عرض المنشور بكامل تفاصيله!")
+                await query.answer("تم عرض المنشور!")
 
         elif data.startswith("delete_main_q_"):
             q_id = int(data.replace("delete_main_q_", ""))
@@ -554,14 +741,29 @@ async def callback_handler(client: Client, query: CallbackQuery):
         elif data == "type_normal":
             post_data = temp_posts.get(user_id)
             if post_data:
-                add_to_queue_db(post_data['chat_id'], post_data['msg_id'], post_data['media_group_id'], get_channels())
-                await query.message.edit_text("📥 **تم إضافة المنشور في الطابور الرئيسي!**")
+                add_to_queue_db(post_data['chat_id'], post_data['msg_id'], post_data['media_group_id'], target_channels)
+                await query.message.edit_text("📥 **تم إدراج المنشور بنجاح في الطابور الرئيسي!**")
                 del temp_posts[user_id]
+
+        elif data == "type_recurring":
+            user_states[user_id] = "waiting_recurring_info"
+            await query.message.edit_text(
+                "🔄 **إعداد المنشور المكرر:**\n\n"
+                "أرسل البيانات بالشكل الآتي:\n"
+                "`ساعة:دقيقة دقائق_التكرار عدد_التكرارات`\n\n"
+                "📌 **مثال:** `16:00 60 5`\n"
+                "*(السيتم البدء اليوم 04:00 مساءً والتكرار كل 60 دقيقة لخمس مرات)*\n"
+                "*(ضع `0` في عدد التكرارات للتكرار بلا نهاية)*"
+            )
+
+        elif data == "confirm_clear_queue":
+            clear_queue_db()
+            await query.message.edit_text("🗑️ **تم إفراغ الطابور الرئيسي.**")
 
     except Exception as e:
         print(f"[!] خطأ تفاعل: {e}")
 
-# ==================== 7. رفع واستقبال ملفات ZIP والرسائل ====================
+# ==================== 7. استقبال الملفات المضغوطة ZIP والرسائل ====================
 
 @app.on_message(admin_filter & filters.document)
 async def handle_zip_file(client: Client, message: Message):
@@ -614,6 +816,66 @@ async def process_inputs(client: Client, message: Message):
     text = message.text or ""
     state = user_states.get(user_id)
 
+    if state == "waiting_add_channel" and message.text:
+        ch = f"@{text.replace('https://t.me/', '').replace('t.me/', '').strip('@ ')}"
+        add_channel_db(ch)
+        await message.reply_text(f"✅ تم إضافة القناة `{ch}` بنجاح!", reply_markup=get_main_reply_keyboard())
+        user_states[user_id] = None
+        return
+
+    if state == "waiting_custom_time" and message.text:
+        try:
+            POST_INTERVAL = int(text.strip()) * 60
+            user_states[user_id] = None
+            await message.reply_text(f"✅ **تم الضبط إلى `{int(text.strip())}` دقيقة.**", reply_markup=get_main_reply_keyboard())
+            return
+        except ValueError:
+            await message.reply_text("❌ أرسل أرقاماً فقط.")
+            return
+
+    if state == "waiting_footer" and message.text:
+        custom_footer = message.text.strip()
+        user_states[user_id] = None
+        await message.reply_text(f"✅ **تم حفظ التوقيع.**", reply_markup=get_main_reply_keyboard())
+        return
+
+    if state == "waiting_recurring_info" and message.text:
+        try:
+            parts = text.strip().split()
+            time_part, interval_min, repeats = parts[0], int(parts[1]), int(parts[2])
+            hour, minute = map(int, time_part.split(":"))
+
+            now = datetime.now()
+            start_dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if start_dt < now:
+                start_dt += timedelta(days=1)
+
+            post_data = temp_posts.get(user_id)
+            if post_data:
+                repeats_val = -1 if repeats == 0 else repeats
+                add_recurring_db(
+                    post_data['chat_id'],
+                    post_data['msg_id'],
+                    post_data['media_group_id'],
+                    get_channels(),
+                    start_dt,
+                    interval_min * 60,
+                    repeats_val
+                )
+                user_states[user_id] = None
+                del temp_posts[user_id]
+                await message.reply_text(
+                    f"✅ **تم إضافة المنشور المكرر!**\n\n"
+                    f"⏰ **النشر الأول:** `{start_dt.strftime('%Y-%m-%d %H:%M')}`\n"
+                    f"⏱️ **التكرار:** كل `{interval_min}` دقيقة\n"
+                    f"🔢 **المرات:** `{'غير محدود' if repeats_val == -1 else repeats_val}`",
+                    reply_markup=get_main_reply_keyboard()
+                )
+            return
+        except Exception:
+            await message.reply_text("❌ صيغة غير صحيحة. مثال: `16:00 60 5`")
+            return
+
     if state and state.startswith("wait_file_start_time_"):
         fid = int(state.replace("wait_file_start_time_", ""))
         try:
@@ -657,6 +919,7 @@ async def process_inputs(client: Client, message: Message):
 
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🟢 منشور عادي (جدولة)", callback_data="type_normal")],
+            [InlineKeyboardButton("🔄 منشور مكرر", callback_data="type_recurring")],
             [InlineKeyboardButton("🔴 إلغاء", callback_data="action_cancel")]
         ])
 
