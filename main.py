@@ -408,7 +408,7 @@ async def handle_reply_buttons(client: Client, message: Message):
             [
                 InlineKeyboardButton("🕒 3 ساعات", callback_data="set_time_180"),
                 InlineKeyboardButton("🕔 5 ساعات", callback_data="set_time_300"),
-                InlineKeyboardButton("            InlineKeyboardButton("720")
+                InlineKeyboardButton("🕕 12 ساعة", callback_data="set_time_720")
             ],
             [InlineKeyboardButton("✏️ إدخال عدد الدقائق يدوياً", callback_data="set_custom_time")]
         ])
