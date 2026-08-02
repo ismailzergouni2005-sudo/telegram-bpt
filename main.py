@@ -3,6 +3,7 @@ import asyncio
 import sqlite3
 import zipfile
 import shutil
+import mimetypes
 from datetime import datetime, timedelta
 from pyrogram import Client, filters, idle
 from pyrogram.types import (
@@ -67,6 +68,20 @@ BUTTON_TEXTS = [
     "🗑️ إفراغ الطابور بالكامل",
     "📈 إحصائيات النشر"
 ]
+
+# قائمة الامتدادات الشائعة والمعروفة للصور بكل أنواعها
+IMAGE_EXTENSIONS = (
+    '.jpg', '.jpeg', '.png', '.webp', '.bmp', 
+    '.gif', '.tiff', '.tif', '.heic', '.heif', 
+    '.svg', '.ico', '.avif'
+)
+
+def is_image_file(file_path):
+    """دالة للتحقق من أن الملف صورة بغض النظر عن صيغتها"""
+    if file_path.lower().endswith(IMAGE_EXTENSIONS):
+        return True
+    mime, _ = mimetypes.guess_type(file_path)
+    return mime and mime.startswith('image/')
 
 # ==================== 2. إدارة قاعدة البيانات (SQLite) ====================
 
@@ -385,7 +400,7 @@ async def start_cmd(client: Client, message: Message):
         "✨ **المزايا:**\n"
         "🟢 نشر عادي وطابور جدولة.\n"
         "🔄 منشورات مكررة بتوقيت وتكرار مخصص.\n"
-        "📁 رفع ملفات ZIP وتخصيص طابور مستقل لكل ملف.\n"
+        "📁 رفع ملفات ZIP ودعم **كافة صيغ وأنوع الصور** مع طابور خاص بكل ملف.\n"
         "🎨 إضافة التوقيع والنصوص التشعبية.\n\n"
         "👇 **اختر من الأزرار الملونة أدناه للبدء:**",
         reply_markup=get_main_reply_keyboard()
@@ -422,7 +437,7 @@ async def handle_reply_buttons(client: Client, message: Message):
     elif text == "📁 إدارة الملفات المرفوعة":
         files = get_uploaded_files()
         if not files:
-            await message.reply_text("📁 **لا توجد ملفات مرفوعة حالياً.**\nأرسل ملف مضغوط بصيغة `.zip` يحتوي على صور لرفعه للبوت.")
+            await message.reply_text("📁 **لا توجد ملفات مرفوعة حالياً.**\nأرسل ملف مضغوط بصيغة `.zip` يحتوي على صور بأي صيغة لرفعه للبوت.")
             return
 
         msg_text = "📁 **قائمة الملفات وطوابيرها المخصصة:**\n\n"
@@ -477,7 +492,7 @@ async def handle_reply_buttons(client: Client, message: Message):
     elif text == "🗑️ إفراغ الطابور بالكامل":
         queue_len = len(get_queue_db())
         if queue_len == 0:
-            await message.reply_text("⚠️ **الطابور الفارغ بالفعل.**")
+            await message.reply_text("⚠️ **الطابور فارغ بالفعل.**")
             return
         confirm_kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ نعم، إفراغ الطابور", callback_data="confirm_clear_queue")],
@@ -543,7 +558,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
                 await query.answer("⚠️ طابور الملف فارغ!", show_alert=True)
                 return
 
-            msg_text = f"📋 **طابور الصور الخواص بالملف (`{fname}`):**\n\n"
+            msg_text = f"📋 **طابور الصور الخاص بالملف (`{fname}`):**\n\n"
             buttons = []
             for item_id, ppath, idx in fqueue:
                 pname = os.path.basename(ppath)
@@ -580,7 +595,6 @@ async def callback_handler(client: Client, query: CallbackQuery):
             delete_file_queue_item(item_id, fid)
             await query.answer("تم حذف الصورة من طابور الملف!", show_alert=True)
             
-            # إعادة تحذيث القائمة
             fqueue = get_file_queue(fid)
             if fqueue:
                 await query.message.edit_text(f"✅ **تم تحديث طابور الملف.** اضغط لعرض القائمة من جديد.", 
@@ -624,7 +638,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
 @app.on_message(admin_filter & filters.document)
 async def handle_zip_file(client: Client, message: Message):
     if message.document.file_name and message.document.file_name.lower().endswith(".zip"):
-        msg = await message.reply_text("📥 **جاري تنزيل الملف وحفظ الصور وتعيين طابور خاص بالملف... يرجى الانتظار**")
+        msg = await message.reply_text("📥 **جاري تنزيل الملف وفحص الصور لكافة الصيغ... يرجى الانتظار**")
         try:
             download_path = await message.download()
             extract_folder = f"uploaded_files/{int(datetime.now().timestamp())}"
@@ -633,11 +647,18 @@ async def handle_zip_file(client: Client, message: Message):
             with zipfile.ZipFile(download_path, 'r') as zip_ref:
                 zip_ref.extractall(extract_folder)
 
-            photos = [os.path.join(extract_folder, f) for f in os.listdir(extract_folder) if f.lower().endswith(('.jpg', '.jpeg', '.png', '.webp'))]
+            # تصفية استخراج جميع الصور دون التقييد بصيغة معينة
+            photos = []
+            for root, _, files in os.walk(extract_folder):
+                for f in files:
+                    full_p = os.path.join(root, f)
+                    if is_image_file(full_p):
+                        photos.append(full_p)
+
             photos.sort()
 
             if not photos:
-                await msg.edit_text("⚠️ **الملف المضغوط لا يحتوي على صور تدعم الصيغ المعيارية (JPG, PNG, WEBP).**")
+                await msg.edit_text("⚠️ **الملف المضغوط لا يحتوي على أي صور.**")
                 shutil.rmtree(extract_folder, ignore_errors=True)
             else:
                 fid = save_uploaded_file(message.document.file_name, photos, extract_folder)
@@ -648,7 +669,7 @@ async def handle_zip_file(client: Client, message: Message):
                 await msg.edit_text(
                     f"✅ **تم حفظ الملف وتشكيل طابور خاص به بنجاح!**\n\n"
                     f"📦 **اسم الملف:** `{message.document.file_name}`\n"
-                    f"🖼️ **عدد صور الطابور الخاص:** `{len(photos)}` صورة\n\n"
+                    f"🖼️ **إجمالي الصور الملتقطة:** `{len(photos)}` صورة\n\n"
                     f"يمكنك الآن التوجه لقسم `📁 إدارة الملفات المرفوعة` للتحكم بطابور هذا الملف.",
                     reply_markup=kb
                 )
