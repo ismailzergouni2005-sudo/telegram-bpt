@@ -775,7 +775,6 @@ async def auto_collect_all_types(client: Client, message: Message):
 
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("⏱️ 30 دقيقة", callback_data="rec_int_30"), InlineKeyboardButton("🕐 1 ساعة", callback_data="rec_int_60")],
-            [InlineKeyboardButton("🕒 6 ساعات", callback_data="rec_int_360"), InlineKeyboardButton("```python
             [InlineKeyboardButton("🕒 6 ساعات", callback_data="rec_int_360"), InlineKeyboardButton("🕛 12 ساعة", callback_data="rec_int_720")],
             [InlineKeyboardButton("📅 24 ساعة (يومياً)", callback_data="rec_int_1440")]
         ])
